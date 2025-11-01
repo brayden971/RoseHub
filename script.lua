@@ -33,7 +33,9 @@ local fieldCoords = {
     ["Bamboo Field"] = Vector3.new(-1638.96, 117.49, -163.70),
     ["Glitch Field"] = Vector3.new(-2568.07, 168.00, -429.88),
     ["Cave Field"] = Vector3.new(-2093.76, 191.30, -567.17),
-    ["Mountain Field"] = Vector3.new(-1986.87, 236.44, -516.52)
+    ["Mountain Field"] = Vector3.new(-1986.87, 236.44, -516.52),
+    ["Pineapple Field"] = Vector3.new(-2451.53, 197.73, 404.52),
+    ["Dragon Fruit Field"] = Vector3.new(-2199.40, 147.26, 257.70)
 }
 
 -- Hive Coordinates
@@ -753,7 +755,7 @@ local function startFarming()
     
     addToConsole("Moving to: " .. toggles.field)
     
-    -- Move to field with smooth tween
+    -- Move to field with selected movement method
     if moveToPosition(fieldPos) then
         toggles.atField = true
         local initialPollen = getCurrentPollen()
@@ -774,6 +776,31 @@ local function startFarming()
     end
 end
 
+-- Function to change field while farming
+local function changeFieldWhileFarming(newField)
+    if not toggles.autoFarm or not toggles.isFarming then return end
+    
+    local newFieldPos = fieldCoords[newField]
+    if not newFieldPos then return end
+    
+    addToConsole("🔄 Changing field to: " .. newField)
+    
+    -- Move to new field with selected movement method
+    if moveToPosition(newFieldPos) then
+        toggles.field = newField
+        toggles.atField = true
+        local initialPollen = getCurrentPollen()
+        toggles.lastPollenValue = initialPollen
+        toggles.lastPollenChangeTime = tick()
+        toggles.fieldArrivalTime = tick()
+        toggles.hasCollectedPollen = (initialPollen > 0)
+        
+        addToConsole("✅ Arrived at new field: " .. newField)
+    else
+        addToConsole("❌ Failed to reach new field: " .. newField)
+    end
+end
+
 local function startConverting()
     if toggles.isConverting or not ownedHive then return end
     
@@ -788,7 +815,7 @@ local function startConverting()
     
     addToConsole("Moving to hive")
     
-    -- Move to hive with smooth tween
+    -- Move to hive with selected movement method
     if moveToPosition(hivePos) then
         toggles.atHive = true
         addToConsole("✅ At hive")
@@ -866,11 +893,13 @@ local mountainBoosterEnabled = false
 local blueBoosterEnabled = false
 local redBoosterEnabled = false
 local wealthClockEnabled = false
+local mountainCallEnabled = false
 
 local lastMountainBoosterTime = 0
 local lastBlueBoosterTime = 0
 local lastRedBoosterTime = 0
 local lastWealthClockTime = 0
+local lastMountainCallTime = 0
 
 local function useMountainBooster()
     local args = {
@@ -908,6 +937,15 @@ local function useWealthClock()
     lastWealthClockTime = tick()
 end
 
+local function useMountainCall()
+    local args = {
+        "Call of the Mountain",
+        25
+    }
+    game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("UseMachine"):FireServer(unpack(args))
+    lastMountainCallTime = tick()
+end
+
 local function updateToys()
     local currentTime = tick()
     
@@ -925,6 +963,10 @@ local function updateToys()
     
     if wealthClockEnabled and currentTime - lastWealthClockTime >= 3600 then
         useWealthClock()
+    end
+    
+    if mountainCallEnabled and currentTime - lastMountainCallTime >= 21600 then -- 6 hours
+        useMountainCall()
     end
 end
 
@@ -955,13 +997,19 @@ local MainTab = Window:AddTab("Farming", "shovel")
 -- Farming Settings
 local FarmingGroupbox = MainTab:AddLeftGroupbox("Farming")
 local FieldDropdown = FarmingGroupbox:AddDropdown("FieldDropdown", {
-    Values = {"Mango Field", "Blueberry Field", "Daisy Field", "Cactus Field", "Strawberry Field", "Apple Field", "Lemon Field", "Grape Field", "Watermelon Field", "Forest Field", "Pear Field", "Mushroom Field", "Clover Field", "Bamboo Field", "Glitch Field", "Cave Field", "Mountain Field"},
+    Values = {"Mango Field", "Blueberry Field", "Daisy Field", "Cactus Field", "Strawberry Field", "Apple Field", "Lemon Field", "Grape Field", "Watermelon Field", "Forest Field", "Pear Field", "Mushroom Field", "Clover Field", "Bamboo Field", "Glitch Field", "Cave Field", "Mountain Field", "Pineapple Field", "Dragon Fruit Field"},
     Default = 1,
     Multi = false,
     Text = "Field",
     Callback = function(Value)
+        local oldField = toggles.field
         toggles.field = Value
         saveSettings()
+        
+        -- If farming and field changed, move to new field
+        if toggles.autoFarm and toggles.isFarming and oldField ~= Value then
+            changeFieldWhileFarming(Value)
+        end
     end
 })
 
@@ -1129,6 +1177,19 @@ local WealthClockToggle = WealthClockGroupbox:AddToggle("WealthClockToggle", {
         wealthClockEnabled = Value
         if Value then
             useWealthClock()
+        end
+    end
+})
+
+-- Mountain Call
+local MountainCallGroupbox = ToysTab:AddLeftGroupbox("Mountain Call")
+local MountainCallToggle = MountainCallGroupbox:AddToggle("MountainCallToggle", {
+    Text = "Auto Call of the Mountain",
+    Default = false,
+    Callback = function(Value)
+        mountainCallEnabled = Value
+        if Value then
+            useMountainCall()
         end
     end
 })
