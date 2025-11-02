@@ -95,63 +95,22 @@ local honeyStats = {
     hourlyRate = 0
 }
 
--- AUTO SPRINKLERS SYSTEM
+-- AUTO SPRINKLERS SYSTEM - FIXED
 local autoSprinklersEnabled = false
 local selectedSprinkler = "Basic Sprinkler"
 local sprinklerPlacementCount = 0
 local lastSprinklerPlaceTime = 0
 local sprinklerCooldown = 2 -- seconds between placements
+local currentFieldVisits = {} -- Track visits per field
 
--- Sprinkler configurations
+-- Sprinkler configurations - SIMPLIFIED
 local sprinklerConfigs = {
-    ["Broken Sprinkler"] = {
-        count = 1,
-        pattern = function(fieldPos)
-            return {fieldPos}
-        end
-    },
-    ["Basic Sprinkler"] = {
-        count = 1,
-        pattern = function(fieldPos)
-            return {fieldPos}
-        end
-    },
-    ["Silver Soakers"] = {
-        count = 2,
-        pattern = function(fieldPos)
-            return {
-                fieldPos + Vector3.new(3, 0, 0),  -- Right
-                fieldPos + Vector3.new(-3, 0, 0)  -- Left
-            }
-        end
-    },
-    ["Golden Gushers"] = {
-        count = 3,
-        pattern = function(fieldPos)
-            return {
-                fieldPos + Vector3.new(3, 0, 0),   -- Right
-                fieldPos + Vector3.new(-3, 0, 0),  -- Left
-                fieldPos + Vector3.new(0, 0, -3)   -- Down
-            }
-        end
-    },
-    ["Diamond Drenchers"] = {
-        count = 4,
-        pattern = function(fieldPos)
-            return {
-                fieldPos + Vector3.new(3, 0, 3),    -- Top Right
-                fieldPos + Vector3.new(-3, 0, 3),   -- Top Left
-                fieldPos + Vector3.new(3, 0, -3),   -- Bottom Right
-                fieldPos + Vector3.new(-3, 0, -3)   -- Bottom Left
-            }
-        end
-    },
-    ["Supreme Saturator"] = {
-        count = 1,
-        pattern = function(fieldPos)
-            return {fieldPos}
-        end
-    }
+    ["Broken Sprinkler"] = {count = 1},
+    ["Basic Sprinkler"] = {count = 1},
+    ["Silver Soakers"] = {count = 2},
+    ["Golden Gushers"] = {count = 3},
+    ["Diamond Drenchers"] = {count = 4},
+    ["Supreme Saturator"] = {count = 1}
 }
 
 local player = Players.LocalPlayer
@@ -666,121 +625,95 @@ local function performContinuousMovement()
     end
 end
 
--- FIXED AUTO SPRINKLERS SYSTEM FUNCTIONS
+-- COMPLETELY FIXED AUTO SPRINKLERS SYSTEM
 local function findSprinklerTool()
     local character = GetCharacter()
     local backpack = player:FindFirstChild("Backpack")
     
     if not character or not backpack then return nil end
     
-    -- First check character for equipped sprinkler
+    -- Look for sprinkler tool names that match the selected sprinkler
+    local sprinklerNames = {
+        ["Broken Sprinkler"] = {"Broken Sprinkler", "BrokenSprinkler"},
+        ["Basic Sprinkler"] = {"Basic Sprinkler", "BasicSprinkler", "Sprinkler"},
+        ["Silver Soakers"] = {"Silver Soakers", "SilverSoakers"},
+        ["Golden Gushers"] = {"Golden Gushers", "GoldenGushers"},
+        ["Diamond Drenchers"] = {"Diamond Drenchers", "DiamondDrenchers"},
+        ["Supreme Saturator"] = {"Supreme Saturator", "SupremeSaturator"}
+    }
+    
+    local namesToCheck = sprinklerNames[selectedSprinkler] or {selectedSprinkler}
+    
+    -- Check character first
     for _, tool in pairs(character:GetChildren()) do
-        if tool:IsA("Tool") and (string.find(tool.Name:lower(), "sprinkler") or string.find(tool.Name:lower(), "soaker") or string.find(tool.Name:lower(), "gusher") or string.find(tool.Name:lower(), "drencher") or string.find(tool.Name:lower(), "saturator")) then
-            return tool
+        if tool:IsA("Tool") then
+            for _, name in ipairs(namesToCheck) do
+                if tool.Name == name then
+                    return tool
+                end
+            end
         end
     end
     
-    -- Then check backpack
+    -- Check backpack
     for _, tool in pairs(backpack:GetChildren()) do
-        if tool:IsA("Tool") and (string.find(tool.Name:lower(), "sprinkler") or string.find(tool.Name:lower(), "soaker") or string.find(tool.Name:lower(), "gusher") or string.find(tool.Name:lower(), "drencher") or string.find(tool.Name:lower(), "saturator")) then
-            return tool
+        if tool:IsA("Tool") then
+            for _, name in ipairs(namesToCheck) do
+                if tool.Name == name then
+                    return tool
+                end
+            end
         end
     end
     
     return nil
 end
 
-local function unequipSprinkler()
+local function useSprinkler()
     local character = GetCharacter()
-    local backpack = player:FindFirstChild("Backpack")
-    
-    if character and backpack then
-        for _, tool in pairs(character:GetChildren()) do
-            if tool:IsA("Tool") and (string.find(tool.Name:lower(), "sprinkler") or string.find(tool.Name:lower(), "soaker") or string.find(tool.Name:lower(), "gusher") or string.find(tool.Name:lower(), "drencher") or string.find(tool.Name:lower(), "saturator")) then
-                tool.Parent = backpack
-                addToConsole("🔧 Unequipped: " .. tool.Name)
-                return true
-            end
-        end
-    end
-    return false
-end
-
-local function equipSprinkler()
-    local character = GetCharacter()
-    local humanoid = character and character:FindFirstChild("Humanoid")
-    local backpack = player:FindFirstChild("Backpack")
-    
-    if not humanoid or not backpack then return false end
-    
     local sprinklerTool = findSprinklerTool()
-    if sprinklerTool then
-        humanoid:EquipTool(sprinklerTool)
-        addToConsole("🔧 Equipped: " .. sprinklerTool.Name)
-        task.wait(0.5)
-        return true
-    end
     
-    return false
-end
-
-local function useSprinklerAtPosition(position)
-    local character = GetCharacter()
-    local humanoid = character and character:FindFirstChild("Humanoid")
-    
-    if not humanoid then return false end
-    
-    -- Move near the position first (but not exactly on it)
-    local nearPosition = position + Vector3.new(2, 0, 2)
-    moveToPosition(nearPosition)
-    task.wait(0.5)
-    
-    -- Find equipped sprinkler tool
-    local sprinklerTool = findSprinklerTool()
     if not sprinklerTool then
-        addToConsole("❌ No sprinkler tool found")
+        addToConsole("❌ No sprinkler tool found: " .. selectedSprinkler)
         return false
     end
     
-    -- Make sure it's equipped
+    -- Make sure tool is equipped
     if sprinklerTool.Parent ~= character then
-        humanoid:EquipTool(sprinklerTool)
-        task.wait(0.5)
+        local humanoid = character:FindFirstChild("Humanoid")
+        if humanoid then
+            humanoid:EquipTool(sprinklerTool)
+            task.wait(0.5)
+        end
     end
     
-    -- Use the sprinkler
+    -- Find and use the remote
     local remote = sprinklerTool:FindFirstChild("Remote") or sprinklerTool:FindFirstChild("ToolRemote") or sprinklerTool:FindFirstChild("ClickRemote")
     if remote then
-        -- Try different field names that might work
-        local fieldNamesToTry = {
-            toggles.field,
-            "Mushroom Field",
-            "Sunflower Field",
-            "Pineapple Field"
-        }
-        
-        for _, fieldName in ipairs(fieldNamesToTry) do
-            local args = {fieldName}
-            local success = pcall(function()
-                remote:FireServer(unpack(args))
-            end)
-            
-            if success then
-                addToConsole("💦 Placed sprinkler at " .. math.floor(position.X) .. ", " .. math.floor(position.Y) .. ", " .. math.floor(position.Z) .. " in " .. fieldName)
-                task.wait(0.5)
-                return true
-            end
-        end
-        
-        -- If specific fields don't work, try without arguments
+        -- Try with current field name
         local success = pcall(function()
-            remote:FireServer()
+            remote:FireServer(toggles.field)
         end)
         
+        if not success then
+            -- Try with Mushroom Field (common fallback)
+            success = pcall(function()
+                remote:FireServer("Mushroom Field")
+            end)
+        end
+        
+        if not success then
+            -- Try without arguments
+            success = pcall(function()
+                remote:FireServer()
+            end)
+        end
+        
         if success then
-            addToConsole("💦 Placed sprinkler (no field specified)")
-            task.wait(0.5)
+            addToConsole("💦 Used sprinkler: " .. sprinklerTool.Name)
             return true
+        else
+            addToConsole("❌ Failed to use sprinkler remote")
         end
     else
         addToConsole("❌ No remote found in sprinkler tool")
@@ -795,53 +728,121 @@ local function placeSprinklers()
     local currentTime = tick()
     if currentTime - lastSprinklerPlaceTime < sprinklerCooldown then return end
     
-    local fieldPos = fieldCoords[toggles.field]
-    if not fieldPos then return end
-    
     local config = sprinklerConfigs[selectedSprinkler]
     if not config then
         addToConsole("❌ Invalid sprinkler config: " .. selectedSprinkler)
         return
     end
     
-    -- Check if we have a sprinkler tool
-    local sprinklerTool = findSprinklerTool()
-    if not sprinklerTool then
-        addToConsole("❌ No sprinkler tool found in inventory")
-        return
+    -- Track field visits
+    if not currentFieldVisits[toggles.field] then
+        currentFieldVisits[toggles.field] = 0
     end
+    currentFieldVisits[toggles.field] = currentFieldVisits[toggles.field] + 1
     
-    addToConsole("🚿 Starting sprinkler placement: " .. selectedSprinkler)
+    local visitCount = currentFieldVisits[toggles.field]
+    local placementCount = config.count
     
-    -- Handle the glitch by unequipping and re-equipping if this isn't the first placement
-    if sprinklerPlacementCount > 0 then
-        addToConsole("🔄 Handling sprinkler glitch - re-equipping...")
-        unequipSprinkler()
-        task.wait(0.5)
-    end
+    addToConsole("🚿 Placing sprinklers at " .. toggles.field .. " (visit #" .. visitCount .. ")")
     
-    -- Equip sprinkler
-    if equipSprinkler() then
-        -- Get sprinkler positions based on pattern
-        local positions = config.pattern(fieldPos)
-        
-        -- Place sprinklers at each position
-        local placedCount = 0
-        for i, position in ipairs(positions) do
-            if i > config.count then break end -- Don't place more than configured
-            
-            if useSprinklerAtPosition(position) then
-                placedCount = placedCount + 1
+    -- FIRST VISIT: Place 3 times instantly
+    if visitCount == 1 then
+        addToConsole("🔄 First visit - placing 3 times instantly")
+        for i = 1, 3 do
+            if useSprinkler() then
+                sprinklerPlacementCount = sprinklerPlacementCount + 1
             end
+            task.wait(0.3)
+        end
+    -- SECOND VISIT or DIFFERENT FIELD: Unequip once then place normally
+    elseif visitCount == 2 then
+        addToConsole("🔄 Second visit - unequipping then placing normally")
+        -- Unequip by moving tool to backpack
+        local sprinklerTool = findSprinklerTool()
+        if sprinklerTool and sprinklerTool.Parent == GetCharacter() then
+            sprinklerTool.Parent = player:FindFirstChild("Backpack")
             task.wait(0.5)
         end
         
-        sprinklerPlacementCount = sprinklerPlacementCount + 1
-        lastSprinklerPlaceTime = currentTime
-        addToConsole("✅ Successfully placed " .. placedCount .. "/" .. config.count .. " sprinklers (placement #" .. sprinklerPlacementCount .. ")")
+        -- Place normally
+        for i = 1, placementCount do
+            if useSprinkler() then
+                sprinklerPlacementCount = sprinklerPlacementCount + 1
+            end
+            task.wait(0.3)
+        end
+    -- SUBSEQUENT VISITS: Place normally
     else
-        addToConsole("❌ Failed to equip sprinkler tool")
+        addToConsole("🔄 Subsequent visit - placing normally")
+        for i = 1, placementCount do
+            if useSprinkler() then
+                sprinklerPlacementCount = sprinklerPlacementCount + 1
+            end
+            task.wait(0.3)
+        end
     end
+    
+    lastSprinklerPlaceTime = currentTime
+    addToConsole("✅ Finished sprinkler placement")
+end
+
+-- Death respawn system
+local function onCharacterDeath()
+    if toggles.autoFarm and toggles.isFarming then
+        addToConsole("💀 Character died - respawning to field...")
+        
+        -- Wait for respawn
+        task.wait(3)
+        
+        -- Get new character
+        local character = GetCharacter()
+        if character then
+            -- Wait for character to fully load
+            task.wait(2)
+            
+            -- Tween back to field immediately
+            local fieldPos = fieldCoords[toggles.field]
+            if fieldPos then
+                addToConsole("🔄 Respawning to field: " .. toggles.field)
+                if moveToPosition(fieldPos) then
+                    toggles.atField = true
+                    addToConsole("✅ Respawned to field successfully")
+                    
+                    -- After respawning, sprinklers are unequipped so we need to place 3 times
+                    if autoSprinklersEnabled then
+                        addToConsole("🚿 Placing sprinklers after respawn (3 times)")
+                        for i = 1, 3 do
+                            if useSprinkler() then
+                                sprinklerPlacementCount = sprinklerPlacementCount + 1
+                            end
+                            task.wait(0.3)
+                        end
+                    end
+                else
+                    addToConsole("❌ Failed to respawn to field")
+                end
+            end
+        end
+    end
+end
+
+-- Setup death detection
+local function setupDeathDetection()
+    local character = GetCharacter()
+    local humanoid = character:FindFirstChild("Humanoid")
+    
+    if humanoid then
+        humanoid.Died:Connect(onCharacterDeath)
+    end
+    
+    -- Also connect to character added for future characters
+    player.CharacterAdded:Connect(function(newCharacter)
+        task.wait(1) -- Wait for character to load
+        local newHumanoid = newCharacter:FindFirstChild("Humanoid")
+        if newHumanoid then
+            newHumanoid.Died:Connect(onCharacterDeath)
+        end
+    end)
 end
 
 -- Auto Equip Tools Function
@@ -1007,9 +1008,9 @@ local function startFarming()
         
         addToConsole("✅ Arrived at field")
         
-        -- Place sprinklers when arriving at field
+        -- FIRST THING: Place sprinklers when arriving at field
         if autoSprinklersEnabled then
-            addToConsole("🚿 Placing sprinklers at field...")
+            addToConsole("🚿 FIRST ACTION: Placing sprinklers at field...")
             placeSprinklers()
         end
         
@@ -1307,7 +1308,7 @@ local AutoEquipToggle = FarmingGroupbox:AddToggle("AutoEquipToggle", {
     end
 })
 
--- AUTO SPRINKLERS - FIXED
+-- AUTO SPRINKLERS - COMPLETELY FIXED
 local AutoSprinklersToggle = FarmingGroupbox:AddToggle("AutoSprinklersToggle", {
     Text = "Auto Sprinklers",
     Default = false,
@@ -1317,6 +1318,7 @@ local AutoSprinklersToggle = FarmingGroupbox:AddToggle("AutoSprinklersToggle", {
         if Value then
             addToConsole("🚿 Auto Sprinklers enabled")
             sprinklerPlacementCount = 0
+            currentFieldVisits = {} -- Reset visits when enabling
         else
             addToConsole("🚿 Auto Sprinklers disabled")
         end
@@ -1547,6 +1549,9 @@ player.Idled:Connect(function()
     VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
 end)
 
+-- Setup death detection on startup
+setupDeathDetection()
+
 -- Optimized Main Loops
 local lastHeartbeatTime = 0
 RunService.Heartbeat:Connect(function()
@@ -1649,6 +1654,7 @@ end
 addToConsole("✅ Lavender Hub Ready!")
 addToConsole("🎯 Auto Farm System Ready!")
 addToConsole("🚿 Auto Sprinklers System Ready!")
+addToConsole("💀 Death Respawn System Ready!")
 if ownedHive then
     addToConsole("🏠 Owned Hive: " .. ownedHive)
 else
