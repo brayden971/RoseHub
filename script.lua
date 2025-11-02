@@ -95,21 +95,6 @@ local honeyStats = {
     hourlyRate = 0
 }
 
--- COMBAT SYSTEM - Auto Zombies
-local autoZombiesEnabled = false
-local lastZombieCheckTime = 0
-local currentZombieTarget = nil
-local zombieTokensCollected = 0
-local zombieCheckCounter = 0 -- For optimized checking
-
--- List of all zombie names to look for
-local zombieNames = {
-    "Zombie",
-    "Flame Zombie", 
-    "Frosty Zombie",
-    "Giant Zombie"
-}
-
 -- AUTO SPRINKLERS SYSTEM
 local autoSprinklersEnabled = false
 local selectedSprinkler = "Basic Sprinkler"
@@ -681,30 +666,43 @@ local function performContinuousMovement()
     end
 end
 
--- AUTO SPRINKLERS SYSTEM FUNCTIONS
+-- FIXED AUTO SPRINKLERS SYSTEM FUNCTIONS
+local function findSprinklerTool()
+    local character = GetCharacter()
+    local backpack = player:FindFirstChild("Backpack")
+    
+    if not character or not backpack then return nil end
+    
+    -- First check character for equipped sprinkler
+    for _, tool in pairs(character:GetChildren()) do
+        if tool:IsA("Tool") and (string.find(tool.Name:lower(), "sprinkler") or string.find(tool.Name:lower(), "soaker") or string.find(tool.Name:lower(), "gusher") or string.find(tool.Name:lower(), "drencher") or string.find(tool.Name:lower(), "saturator")) then
+            return tool
+        end
+    end
+    
+    -- Then check backpack
+    for _, tool in pairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") and (string.find(tool.Name:lower(), "sprinkler") or string.find(tool.Name:lower(), "soaker") or string.find(tool.Name:lower(), "gusher") or string.find(tool.Name:lower(), "drencher") or string.find(tool.Name:lower(), "saturator")) then
+            return tool
+        end
+    end
+    
+    return nil
+end
+
 local function unequipSprinkler()
     local character = GetCharacter()
     local backpack = player:FindFirstChild("Backpack")
     
     if character and backpack then
-        -- Look for sprinkler tool in character and unequip it
         for _, tool in pairs(character:GetChildren()) do
-            if tool:IsA("Tool") and string.find(tool.Name:lower(), "sprinkler") then
+            if tool:IsA("Tool") and (string.find(tool.Name:lower(), "sprinkler") or string.find(tool.Name:lower(), "soaker") or string.find(tool.Name:lower(), "gusher") or string.find(tool.Name:lower(), "drencher") or string.find(tool.Name:lower(), "saturator")) then
                 tool.Parent = backpack
-                addToConsole("🔧 Unequipped sprinkler: " .. tool.Name)
-                return true
-            end
-        end
-        
-        -- Look for sprinkler tool in backpack
-        for _, tool in pairs(backpack:GetChildren()) do
-            if tool:IsA("Tool") and string.find(tool.Name:lower(), "sprinkler") then
-                addToConsole("🔧 Sprinkler found in backpack: " .. tool.Name)
+                addToConsole("🔧 Unequipped: " .. tool.Name)
                 return true
             end
         end
     end
-    
     return false
 end
 
@@ -715,56 +713,77 @@ local function equipSprinkler()
     
     if not humanoid or not backpack then return false end
     
-    -- Look for sprinkler tool in backpack
-    for _, tool in pairs(backpack:GetChildren()) do
-        if tool:IsA("Tool") and string.find(tool.Name:lower(), "sprinkler") then
-            humanoid:EquipTool(tool)
-            addToConsole("🔧 Equipped sprinkler: " .. tool.Name)
-            task.wait(0.5)
-            return true
-        end
+    local sprinklerTool = findSprinklerTool()
+    if sprinklerTool then
+        humanoid:EquipTool(sprinklerTool)
+        addToConsole("🔧 Equipped: " .. sprinklerTool.Name)
+        task.wait(0.5)
+        return true
     end
     
     return false
 end
 
-local function placeSprinklerAtPosition(position)
+local function useSprinklerAtPosition(position)
     local character = GetCharacter()
     local humanoid = character and character:FindFirstChild("Humanoid")
     
     if not humanoid then return false end
     
-    -- Move to the position first
-    moveToPosition(position)
+    -- Move near the position first (but not exactly on it)
+    local nearPosition = position + Vector3.new(2, 0, 2)
+    moveToPosition(nearPosition)
     task.wait(0.5)
     
     -- Find equipped sprinkler tool
-    local sprinklerTool = nil
-    for _, tool in pairs(character:GetChildren()) do
-        if tool:IsA("Tool") and string.find(tool.Name:lower(), "sprinkler") then
-            sprinklerTool = tool
-            break
-        end
+    local sprinklerTool = findSprinklerTool()
+    if not sprinklerTool then
+        addToConsole("❌ No sprinkler tool found")
+        return false
     end
     
-    if sprinklerTool then
-        -- Use the sprinkler (this will place it)
-        local remote = sprinklerTool:FindFirstChild("Remote") or sprinklerTool:FindFirstChild("ToolRemote")
-        if remote then
-            -- Get current field name for the placement
-            local currentField = toggles.field
-            if currentField == "Mushroom Field" then
-                currentField = "Mushroom Field"
-            else
-                currentField = "Mushroom Field" -- Default to Mushroom Field as mentioned
-            end
+    -- Make sure it's equipped
+    if sprinklerTool.Parent ~= character then
+        humanoid:EquipTool(sprinklerTool)
+        task.wait(0.5)
+    end
+    
+    -- Use the sprinkler
+    local remote = sprinklerTool:FindFirstChild("Remote") or sprinklerTool:FindFirstChild("ToolRemote") or sprinklerTool:FindFirstChild("ClickRemote")
+    if remote then
+        -- Try different field names that might work
+        local fieldNamesToTry = {
+            toggles.field,
+            "Mushroom Field",
+            "Sunflower Field",
+            "Pineapple Field"
+        }
+        
+        for _, fieldName in ipairs(fieldNamesToTry) do
+            local args = {fieldName}
+            local success = pcall(function()
+                remote:FireServer(unpack(args))
+            end)
             
-            local args = {currentField}
-            remote:FireServer(unpack(args))
-            addToConsole("💦 Placed sprinkler at position: " .. math.floor(position.X) .. ", " .. math.floor(position.Y) .. ", " .. math.floor(position.Z))
+            if success then
+                addToConsole("💦 Placed sprinkler at " .. math.floor(position.X) .. ", " .. math.floor(position.Y) .. ", " .. math.floor(position.Z) .. " in " .. fieldName)
+                task.wait(0.5)
+                return true
+            end
+        end
+        
+        -- If specific fields don't work, try without arguments
+        local success = pcall(function()
+            remote:FireServer()
+        end)
+        
+        if success then
+            addToConsole("💦 Placed sprinkler (no field specified)")
             task.wait(0.5)
             return true
         end
+    else
+        addToConsole("❌ No remote found in sprinkler tool")
     end
     
     return false
@@ -780,14 +799,21 @@ local function placeSprinklers()
     if not fieldPos then return end
     
     local config = sprinklerConfigs[selectedSprinkler]
-    if not config then return end
+    if not config then
+        addToConsole("❌ Invalid sprinkler config: " .. selectedSprinkler)
+        return
+    end
+    
+    -- Check if we have a sprinkler tool
+    local sprinklerTool = findSprinklerTool()
+    if not sprinklerTool then
+        addToConsole("❌ No sprinkler tool found in inventory")
+        return
+    end
     
     addToConsole("🚿 Starting sprinkler placement: " .. selectedSprinkler)
     
-    -- Get sprinkler positions based on pattern
-    local positions = config.pattern(fieldPos)
-    
-    -- Handle the glitch by unequipping and re-equipping
+    -- Handle the glitch by unequipping and re-equipping if this isn't the first placement
     if sprinklerPlacementCount > 0 then
         addToConsole("🔄 Handling sprinkler glitch - re-equipping...")
         unequipSprinkler()
@@ -796,167 +822,25 @@ local function placeSprinklers()
     
     -- Equip sprinkler
     if equipSprinkler() then
+        -- Get sprinkler positions based on pattern
+        local positions = config.pattern(fieldPos)
+        
         -- Place sprinklers at each position
+        local placedCount = 0
         for i, position in ipairs(positions) do
             if i > config.count then break end -- Don't place more than configured
             
-            placeSprinklerAtPosition(position)
+            if useSprinklerAtPosition(position) then
+                placedCount = placedCount + 1
+            end
             task.wait(0.5)
         end
         
         sprinklerPlacementCount = sprinklerPlacementCount + 1
         lastSprinklerPlaceTime = currentTime
-        addToConsole("✅ Sprinklers placed successfully (placement #" .. sprinklerPlacementCount .. ")")
+        addToConsole("✅ Successfully placed " .. placedCount .. "/" .. config.count .. " sprinklers (placement #" .. sprinklerPlacementCount .. ")")
     else
-        addToConsole("❌ No sprinkler tool found in backpack")
-    end
-end
-
--- OPTIMIZED Function to find nearest zombie
-local function findNearestZombie()
-    local character = GetCharacter()
-    local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
-    if not humanoidRootPart then return nil end
-    
-    local nearestZombie = nil
-    local nearestDistance = 10000 -- Increased to 10000 as requested
-    
-    -- Only check specific collections to reduce lag
-    local collectionsToCheck = {
-        workspace:FindFirstChild("Enemies"),
-        workspace:FindFirstChild("Monsters"),
-        workspace:FindFirstChild("Zombies")
-    }
-    
-    -- Also check workspace directly but with counter to reduce lag
-    zombieCheckCounter = zombieCheckCounter + 1
-    local checkWorkspace = (zombieCheckCounter % 3 == 0) -- Only check workspace every 3 cycles
-    
-    for _, collection in ipairs(collectionsToCheck) do
-        if collection then
-            for _, obj in pairs(collection:GetChildren()) do
-                for _, zombieName in ipairs(zombieNames) do
-                    if obj.Name == zombieName and obj:IsA("Model") then
-                        local zombieRoot = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head") or obj:FindFirstChild("Torso")
-                        if zombieRoot then
-                            local distance = (humanoidRootPart.Position - zombieRoot.Position).Magnitude
-                            if distance < nearestDistance then
-                                nearestZombie = obj
-                                nearestDistance = distance
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    -- Check workspace less frequently to reduce lag
-    if checkWorkspace then
-        for _, obj in pairs(workspace:GetChildren()) do
-            for _, zombieName in ipairs(zombieNames) do
-                if obj.Name == zombieName and obj:IsA("Model") then
-                    local zombieRoot = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head") or obj:FindFirstChild("Torso")
-                    if zombieRoot then
-                        local distance = (humanoidRootPart.Position - zombieRoot.Position).Magnitude
-                        if distance < nearestDistance then
-                            nearestZombie = obj
-                            nearestDistance = distance
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    return nearestZombie, nearestDistance
-end
-
--- Function to move to zombie position but keep 5 studs distance
-local function moveToZombie(zombie)
-    if not zombie or not zombie.Parent then return false end
-    
-    local character = GetCharacter()
-    local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
-    local zombieRoot = zombie:FindFirstChild("HumanoidRootPart") or zombie:FindFirstChild("Head") or zombie:FindFirstChild("Torso")
-    
-    if not humanoidRootPart or not zombieRoot then return false end
-    
-    -- Calculate position 5 studs away from zombie
-    local direction = (humanoidRootPart.Position - zombieRoot.Position).Unit
-    local targetPosition = zombieRoot.Position + (direction * 5)
-    targetPosition = Vector3.new(targetPosition.X, humanoidRootPart.Position.Y, targetPosition.Z)
-    
-    -- Move to the calculated position
-    return moveToPosition(targetPosition)
-end
-
--- Function to check if zombie is dead/removed
-local function isZombieDead(zombie)
-    if not zombie or not zombie.Parent then return true end
-    local humanoid = zombie:FindFirstChild("Humanoid")
-    return humanoid and humanoid.Health <= 0
-end
-
--- Function to collect tokens after zombie dies
-local function collectZombieTokens(zombiePosition)
-    addToConsole("🎯 Zombie defeated! Collecting tokens...")
-    
-    -- Move to where the zombie was
-    moveToPosition(zombiePosition)
-    task.wait(1)
-    
-    -- Look for nearby tokens
-    local tokensFolder = workspace:FindFirstChild("Debris") and workspace.Debris:FindFirstChild("Tokens")
-    if tokensFolder then
-        for _, token in pairs(tokensFolder:GetChildren()) do
-            if token:IsA("BasePart") and token:FindFirstChild("Token") then
-                local distance = (token.Position - player.Character.HumanoidRootPart.Position).Magnitude
-                if distance <= 50 then -- Increased range for token collection
-                    addToConsole("💰 Collecting zombie token")
-                    moveToPosition(token.Position)
-                    zombieTokensCollected = zombieTokensCollected + 1
-                    task.wait(0.5)
-                end
-            end
-        end
-    end
-end
-
--- OPTIMIZED Main Auto Zombies function
-local function updateAutoZombies()
-    if not autoZombiesEnabled then return end
-    if toggles.isFarming or toggles.isConverting then return end
-    
-    local currentTime = tick()
-    if currentTime - lastZombieCheckTime < 2 then return end -- Reduced frequency to every 2 seconds
-    lastZombieCheckTime = currentTime
-    
-    -- If we have a current target, check if it's still alive
-    if currentZombieTarget and currentZombieTarget.Parent then
-        if isZombieDead(currentZombieTarget) then
-            local zombieRoot = currentZombieTarget:FindFirstChild("HumanoidRootPart") or currentZombieTarget:FindFirstChild("Head") or currentZombieTarget:FindFirstChild("Torso")
-            local zombiePosition = zombieRoot and zombieRoot.Position
-            currentZombieTarget = nil
-            if zombiePosition then
-                collectZombieTokens(zombiePosition)
-            end
-            return
-        else
-            -- Continue moving to maintain distance from current zombie
-            moveToZombie(currentZombieTarget)
-            return
-        end
-    end
-    
-    -- Find new zombie target
-    local zombie, distance = findNearestZombie()
-    if zombie and distance < 10000 then -- Increased to 10000 as requested
-        currentZombieTarget = zombie
-        addToConsole("🎯 Targeting zombie: " .. zombie.Name .. " (" .. math.floor(distance) .. " studs away)")
-        moveToZombie(zombie)
-    else
-        currentZombieTarget = nil
+        addToConsole("❌ Failed to equip sprinkler tool")
     end
 end
 
@@ -1423,7 +1307,7 @@ local AutoEquipToggle = FarmingGroupbox:AddToggle("AutoEquipToggle", {
     end
 })
 
--- AUTO SPRINKLERS - NEW ADDITION
+-- AUTO SPRINKLERS - FIXED
 local AutoSprinklersToggle = FarmingGroupbox:AddToggle("AutoSprinklersToggle", {
     Text = "Auto Sprinklers",
     Default = false,
@@ -1522,30 +1406,6 @@ local AntiLagToggle = AntiLagGroupbox:AddToggle("AntiLagToggle", {
         end
     end
 })
-
--- COMBAT TAB
-local CombatTab = Window:AddTab("Combat", "sword")
-
--- Combat Settings
-local CombatGroupbox = CombatTab:AddLeftGroupbox("Auto Zombies")
-local AutoZombiesToggle = CombatGroupbox:AddToggle("AutoZombiesToggle", {
-    Text = "Auto Zombies",
-    Default = false,
-    Callback = function(Value)
-        autoZombiesEnabled = Value
-        if Value then
-            addToConsole("🧟 Auto Zombies enabled")
-            currentZombieTarget = nil
-        else
-            addToConsole("🧟 Auto Zombies disabled")
-            currentZombieTarget = nil
-        end
-    end
-})
-
-local ZombieStatsGroupbox = CombatTab:AddRightGroupbox("Zombie Stats")
-local ZombiesKilledLabel = ZombieStatsGroupbox:AddLabel("Tokens Collected: 0")
-local CurrentTargetLabel = ZombieStatsGroupbox:AddLabel("Current Target: None")
 
 -- Toys Tab
 local ToysTab = Window:AddTab("Toys", "gift")
@@ -1701,7 +1561,6 @@ RunService.Heartbeat:Connect(function()
     autoEquipTools()
     updateToys()
     updateHoneyStats()
-    updateAutoZombies()
     
     -- Update status display
     local statusText = "Idle"
@@ -1719,22 +1578,10 @@ RunService.Heartbeat:Connect(function()
         end
     end
     
-    if autoZombiesEnabled and not toggles.autoFarm then
-        if currentZombieTarget then
-            statusText = "Fighting Zombie"
-        else
-            statusText = "Hunting Zombies"
-        end
-    end
-    
     StatusLabel:SetText("Status: " .. statusText)
     PollenLabel:SetText("Pollen: " .. formatNumber(currentPollen))
     HourlyHoneyLabel:SetText("Hourly Honey: " .. formatNumber(honeyStats.hourlyRate))
     SprinklerStatusLabel:SetText("Sprinklers: " .. sprinklerPlacementCount .. " placed")
-    
-    -- Update zombie stats
-    ZombiesKilledLabel:SetText("Tokens Collected: " .. zombieTokensCollected)
-    CurrentTargetLabel:SetText("Current Target: " .. (currentZombieTarget and currentZombieTarget.Name or "None"))
     
     -- Update debug labels
     HoneyMadeLabel:SetText("Honey Made: " .. formatNumber(honeyStats.honeyMade))
@@ -1747,7 +1594,7 @@ spawn(function()
         local currentPollen = getCurrentPollen()
         
         WrappedLabel:SetText(string.format(
-            "Pollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Zombies: %s\nAuto Sprinklers: %s\nSprinkler Type: %s",
+            "Pollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s",
             formatNumber(currentPollen),
             toggles.field,
             displayHiveName,
@@ -1756,7 +1603,6 @@ spawn(function()
             toggles.autoEquip and "ON" or "OFF",
             toggles.antiLag and "ON" or "OFF",
             formatNumber(honeyStats.hourlyRate),
-            autoZombiesEnabled and "ON" or "OFF",
             autoSprinklersEnabled and "ON" or "OFF",
             selectedSprinkler
         ))
@@ -1802,7 +1648,6 @@ end
 
 addToConsole("✅ Lavender Hub Ready!")
 addToConsole("🎯 Auto Farm System Ready!")
-addToConsole("🧟 Auto Zombies System Ready!")
 addToConsole("🚿 Auto Sprinklers System Ready!")
 if ownedHive then
     addToConsole("🏠 Owned Hive: " .. ownedHive)
