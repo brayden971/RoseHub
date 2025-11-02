@@ -92,14 +92,16 @@ local toggles = {
     }
 }
 
--- Honey tracking
+-- Honey tracking - IMPROVED
 local honeyStats = {
     startHoney = 0,
     currentHoney = 0,
     lastHoneyCheck = tick(),
     honeyMade = 0,
     hourlyRate = 0,
-    lastHoneyValue = 0
+    lastHoneyValue = 0,
+    trackingStarted = false,
+    startTrackingTime = 0
 }
 
 -- IMPROVED AUTO SPRINKLERS SYSTEM - MORE STABLE
@@ -200,7 +202,7 @@ local function getCurrentHoney()
     return 0
 end
 
--- Format numbers with K, M, B, T, Q
+-- FIXED: Format numbers with K, M, B, T, Q - CORRECT ORDER
 local function formatNumber(num)
     if num < 1000 then
         return tostring(math.floor(num))
@@ -214,12 +216,71 @@ local function formatNumber(num)
         suffixIndex = suffixIndex + 1
     end
     
+    -- Fix the suffix order - each step should be 1000x, not 1000x per suffix
+    -- K = 1,000 | M = 1,000,000 | B = 1,000,000,000 | T = 1,000,000,000,000 | Q = 1,000,000,000,000,000
     if num >= 100 then
         return string.format("%.0f%s", num, suffixes[suffixIndex])
     elseif num >= 10 then
         return string.format("%.1f%s", num, suffixes[suffixIndex])
     else
         return string.format("%.2f%s", num, suffixes[suffixIndex])
+    end
+end
+
+-- NEW: Correct format function that properly handles the progression
+local function formatNumberCorrect(num)
+    if num < 1000 then
+        return tostring(math.floor(num))
+    elseif num < 1000000 then
+        -- Thousands
+        local formatted = num / 1000
+        if formatted >= 100 then
+            return string.format("%.0fK", formatted)
+        elseif formatted >= 10 then
+            return string.format("%.1fK", formatted)
+        else
+            return string.format("%.2fK", formatted)
+        end
+    elseif num < 1000000000 then
+        -- Millions
+        local formatted = num / 1000000
+        if formatted >= 100 then
+            return string.format("%.0fM", formatted)
+        elseif formatted >= 10 then
+            return string.format("%.1fM", formatted)
+        else
+            return string.format("%.2fM", formatted)
+        end
+    elseif num < 1000000000000 then
+        -- Billions
+        local formatted = num / 1000000000
+        if formatted >= 100 then
+            return string.format("%.0fB", formatted)
+        elseif formatted >= 10 then
+            return string.format("%.1fB", formatted)
+        else
+            return string.format("%.2fB", formatted)
+        end
+    elseif num < 1000000000000000 then
+        -- Trillions
+        local formatted = num / 1000000000000
+        if formatted >= 100 then
+            return string.format("%.0fT", formatted)
+        elseif formatted >= 10 then
+            return string.format("%.1fT", formatted)
+        else
+            return string.format("%.2fT", formatted)
+        end
+    else
+        -- Quadrillions
+        local formatted = num / 1000000000000000
+        if formatted >= 100 then
+            return string.format("%.0fQ", formatted)
+        elseif formatted >= 10 then
+            return string.format("%.1fQ", formatted)
+        else
+            return string.format("%.2fQ", formatted)
+        end
     end
 end
 
@@ -408,36 +469,50 @@ local function SafeCall(func, name)
     return success
 end
 
--- Update honey statistics
+-- IMPROVED: Update honey statistics - only track when auto farm is on
 local function updateHoneyStats()
     local currentHoney = getCurrentHoney()
     
-    if honeyStats.startHoney == 0 then
+    -- Reset tracking when auto farm is turned off
+    if not toggles.autoFarm then
+        if honeyStats.trackingStarted then
+            honeyStats.trackingStarted = false
+            honeyStats.honeyMade = 0
+            honeyStats.hourlyRate = 0
+            honeyStats.startTrackingTime = 0
+        end
+        honeyStats.lastHoneyValue = currentHoney
+        return
+    end
+    
+    -- Start tracking when auto farm is turned on
+    if not honeyStats.trackingStarted then
+        honeyStats.trackingStarted = true
+        honeyStats.startTrackingTime = tick()
         honeyStats.startHoney = currentHoney
         honeyStats.currentHoney = currentHoney
         honeyStats.lastHoneyValue = currentHoney
+        honeyStats.honeyMade = 0
+        honeyStats.hourlyRate = 0
         honeyStats.lastHoneyCheck = tick()
         return
     end
     
+    -- Only track gains when auto farm is running
     if currentHoney > honeyStats.lastHoneyValue then
         local honeyGained = currentHoney - honeyStats.lastHoneyValue
         honeyStats.honeyMade = honeyStats.honeyMade + honeyGained
         honeyStats.currentHoney = currentHoney
         honeyStats.lastHoneyValue = currentHoney
         
-        -- Calculate hourly rate
-        local timeElapsed = (tick() - honeyStats.lastHoneyCheck) / 3600 -- Convert to hours
+        -- Calculate hourly rate based on actual farming time
+        local timeElapsed = (tick() - honeyStats.startTrackingTime) / 3600 -- Convert to hours
         if timeElapsed > 0 then
             honeyStats.hourlyRate = honeyStats.honeyMade / timeElapsed
         end
     elseif currentHoney < honeyStats.lastHoneyValue then
-        -- Honey decreased, reset tracking
-        honeyStats.startHoney = currentHoney
-        honeyStats.currentHoney = currentHoney
+        -- Honey decreased, update tracking but don't reset
         honeyStats.lastHoneyValue = currentHoney
-        honeyStats.honeyMade = 0
-        honeyStats.lastHoneyCheck = tick()
     end
 end
 
@@ -1239,17 +1314,17 @@ local function sendWebhook()
             },
             {
                 name = "Current Honey",
-                value = formatNumber(currentHoney),
+                value = formatNumberCorrect(currentHoney),
                 inline = true
             },
             {
                 name = "Current Pollen",
-                value = formatNumber(currentPollen),
+                value = formatNumberCorrect(currentPollen),
                 inline = true
             },
             {
                 name = "Hourly Honey Rate",
-                value = formatNumber(honeyStats.hourlyRate) .. "/h",
+                value = formatNumberCorrect(honeyStats.hourlyRate) .. "/h",
                 inline = true
             },
             {
@@ -1382,7 +1457,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 
 local Window = Library:CreateWindow({
     Title = "Lavender Hub",
-    Footer = "v0.5 (sal is gay)",
+    Footer = "v0.4 (Davi is a sigma)",
     ToggleKeybind = Enum.KeyCode.RightControl,
     Center = true,
     AutoShow = true,
@@ -1778,7 +1853,7 @@ RunService.Heartbeat:Connect(function()
     updateHoneyStats()
     sendWebhook()
     
-    -- Update status display
+    -- Update status display - USING CORRECT FORMATTING
     local statusText = "Idle"
     local currentPollen = getCurrentPollen()
     local currentHoney = getCurrentHoney()
@@ -1796,13 +1871,13 @@ RunService.Heartbeat:Connect(function()
     end
     
     StatusLabel:SetText("Status: " .. statusText)
-    PollenLabel:SetText("Pollen: " .. formatNumber(currentPollen))
-    HourlyHoneyLabel:SetText("Hourly Honey: " .. formatNumber(honeyStats.hourlyRate))
+    PollenLabel:SetText("Pollen: " .. formatNumberCorrect(currentPollen))
+    HourlyHoneyLabel:SetText("Hourly Honey: " .. formatNumberCorrect(honeyStats.hourlyRate))
     SprinklerStatusLabel:SetText("Sprinklers: " .. sprinklerPlacementCount .. " placed")
     
     -- Update debug labels
-    HoneyMadeLabel:SetText("Honey Made: " .. formatNumber(honeyStats.honeyMade))
-    HourlyRateLabel:SetText("Hourly Rate: " .. formatNumber(honeyStats.hourlyRate))
+    HoneyMadeLabel:SetText("Honey Made: " .. formatNumberCorrect(honeyStats.honeyMade))
+    HourlyRateLabel:SetText("Hourly Rate: " .. formatNumberCorrect(honeyStats.hourlyRate))
 end)
 
 -- Stats Update Loop
@@ -1813,15 +1888,15 @@ spawn(function()
         
         WrappedLabel:SetText(string.format(
             "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s",
-            formatNumber(currentHoney),
-            formatNumber(currentPollen),
+            formatNumberCorrect(currentHoney),
+            formatNumberCorrect(currentPollen),
             toggles.field,
             displayHiveName,
             toggles.movementMethod,
             toggles.autoDig and "ON" or "OFF",
             toggles.autoEquip and "ON" or "OFF",
             toggles.antiLag and "ON" or "OFF",
-            formatNumber(honeyStats.hourlyRate),
+            formatNumberCorrect(honeyStats.hourlyRate),
             autoSprinklersEnabled and "ON" or "OFF",
             selectedSprinkler
         ))
@@ -1862,6 +1937,9 @@ displayHiveName = ownedHive and "Hive" or "None"
 honeyStats.startHoney = getCurrentHoney()
 honeyStats.currentHoney = honeyStats.startHoney
 honeyStats.lastHoneyValue = honeyStats.startHoney
+honeyStats.trackingStarted = false
+honeyStats.honeyMade = 0
+honeyStats.hourlyRate = 0
 
 -- Run anti-lag on startup if enabled
 if toggles.antiLag then
