@@ -15,6 +15,12 @@ local CHECK_INTERVAL = 0.2
 local TOKEN_CLEAR_INTERVAL = 5
 local HIVE_CHECK_INTERVAL = 10
 
+-- Webhook Configuration
+local webhookEnabled = false
+local webhookURL = ""
+local webhookInterval = 5 -- minutes
+local lastWebhookTime = 0
+
 -- Field Coordinates
 local fieldCoords = {
     ["Mango Field"] = Vector3.new(-1895.27, 73.50, -141.94),
@@ -92,7 +98,8 @@ local honeyStats = {
     currentHoney = 0,
     lastHoneyCheck = tick(),
     honeyMade = 0,
-    hourlyRate = 0
+    hourlyRate = 0,
+    lastHoneyValue = 0
 }
 
 -- IMPROVED AUTO SPRINKLERS SYSTEM - MORE STABLE
@@ -174,6 +181,48 @@ local consoleLabel = nil
 -- Debug System
 local debugLabels = {}
 
+-- Get current pollen value
+local function getCurrentPollen()
+    local pollenValue = player:FindFirstChild("Pollen")
+    if pollenValue and pollenValue:IsA("NumberValue") then
+        return pollenValue.Value
+    end
+    return 0
+end
+
+-- Get current honey value - FIXED METHOD
+local function getCurrentHoney()
+    for _, child in pairs(player:GetChildren()) do
+        if child:IsA("NumberValue") and child.Name:lower():find("honey") then
+            return child.Value
+        end
+    end
+    return 0
+end
+
+-- Format numbers with K, M, B, T, Q
+local function formatNumber(num)
+    if num < 1000 then
+        return tostring(math.floor(num))
+    end
+    
+    local suffixes = {"K", "M", "B", "T", "Q"}
+    local suffixIndex = 1
+    
+    while num >= 1000 and suffixIndex < #suffixes do
+        num = num / 1000
+        suffixIndex = suffixIndex + 1
+    end
+    
+    if num >= 100 then
+        return string.format("%.0f%s", num, suffixes[suffixIndex])
+    elseif num >= 10 then
+        return string.format("%.1f%s", num, suffixes[suffixIndex])
+    else
+        return string.format("%.2f%s", num, suffixes[suffixIndex])
+    end
+end
+
 local function addToConsole(message)
     local timestamp = os.date("%H:%M:%S")
     local logEntry = "[" .. timestamp .. "] " .. message
@@ -202,7 +251,10 @@ local function saveSettings()
         walkspeedEnabled = toggles.walkspeedEnabled,
         walkspeed = toggles.walkspeed,
         autoSprinklersEnabled = autoSprinklersEnabled,
-        selectedSprinkler = selectedSprinkler
+        selectedSprinkler = selectedSprinkler,
+        webhookEnabled = webhookEnabled,
+        webhookURL = webhookURL,
+        webhookInterval = webhookInterval
     }
     
     local success, encoded = pcall(function()
@@ -244,6 +296,9 @@ local function loadSettings()
             toggles.walkspeed = decoded.walkspeed or toggles.walkspeed
             autoSprinklersEnabled = decoded.autoSprinklersEnabled or autoSprinklersEnabled
             selectedSprinkler = decoded.selectedSprinkler or selectedSprinkler
+            webhookEnabled = decoded.webhookEnabled or webhookEnabled
+            webhookURL = decoded.webhookURL or webhookURL
+            webhookInterval = decoded.webhookInterval or webhookInterval
             addToConsole("Settings loaded")
             return true
         end
@@ -353,38 +408,6 @@ local function SafeCall(func, name)
     return success
 end
 
-local function formatNumber(num)
-    if num < 1000 then return tostring(math.floor(num)) end
-    local suffixes = {"K", "M", "B", "T"}
-    local i = 1
-    while num >= 1000 and i < #suffixes do
-        num = num / 1000
-        i = i + 1
-    end
-    return string.format("%.1f%s", num, suffixes[i])
-end
-
--- Get current pollen value
-local function getCurrentPollen()
-    local pollenValue = player:FindFirstChild("Pollen")
-    if pollenValue and pollenValue:IsA("NumberValue") then
-        return pollenValue.Value
-    end
-    return 0
-end
-
--- Get current honey value
-local function getCurrentHoney()
-    local leaderstats = player:FindFirstChild("leaderstats")
-    if leaderstats then
-        local honey = leaderstats:FindFirstChild("Honey")
-        if honey then
-            return honey.Value
-        end
-    end
-    return 0
-end
-
 -- Update honey statistics
 local function updateHoneyStats()
     local currentHoney = getCurrentHoney()
@@ -392,23 +415,27 @@ local function updateHoneyStats()
     if honeyStats.startHoney == 0 then
         honeyStats.startHoney = currentHoney
         honeyStats.currentHoney = currentHoney
+        honeyStats.lastHoneyValue = currentHoney
         honeyStats.lastHoneyCheck = tick()
         return
     end
     
-    if currentHoney > honeyStats.currentHoney then
-        honeyStats.honeyMade = honeyStats.honeyMade + (currentHoney - honeyStats.currentHoney)
+    if currentHoney > honeyStats.lastHoneyValue then
+        local honeyGained = currentHoney - honeyStats.lastHoneyValue
+        honeyStats.honeyMade = honeyStats.honeyMade + honeyGained
         honeyStats.currentHoney = currentHoney
+        honeyStats.lastHoneyValue = currentHoney
         
         -- Calculate hourly rate
         local timeElapsed = (tick() - honeyStats.lastHoneyCheck) / 3600 -- Convert to hours
         if timeElapsed > 0 then
             honeyStats.hourlyRate = honeyStats.honeyMade / timeElapsed
         end
-    elseif currentHoney < honeyStats.currentHoney then
+    elseif currentHoney < honeyStats.lastHoneyValue then
         -- Honey decreased, reset tracking
         honeyStats.startHoney = currentHoney
         honeyStats.currentHoney = currentHoney
+        honeyStats.lastHoneyValue = currentHoney
         honeyStats.honeyMade = 0
         honeyStats.lastHoneyCheck = tick()
     end
@@ -1185,6 +1212,88 @@ local function clearVisitedTokens()
     end
 end
 
+-- Webhook System
+local function sendWebhook()
+    if not webhookEnabled or webhookURL == "" then return end
+    
+    local currentTime = tick()
+    if currentTime - lastWebhookTime < (webhookInterval * 60) then return end
+    
+    local requestFunc = (syn and syn.request) or (http and http.request) or http_request or request
+    if not requestFunc then
+        addToConsole("❌ No HTTP request function available")
+        return
+    end
+    
+    local currentHoney = getCurrentHoney()
+    local currentPollen = getCurrentPollen()
+    
+    local embed = {
+        title = "Lavender Hub Stats",
+        color = 0x9B59B6,
+        fields = {
+            {
+                name = "Player",
+                value = player.Name,
+                inline = true
+            },
+            {
+                name = "Current Honey",
+                value = formatNumber(currentHoney),
+                inline = true
+            },
+            {
+                name = "Current Pollen",
+                value = formatNumber(currentPollen),
+                inline = true
+            },
+            {
+                name = "Hourly Honey Rate",
+                value = formatNumber(honeyStats.hourlyRate) .. "/h",
+                inline = true
+            },
+            {
+                name = "Field",
+                value = toggles.field,
+                inline = true
+            },
+            {
+                name = "Status",
+                value = toggles.isFarming and "Farming" or toggles.isConverting and "Converting" or "Idle",
+                inline = true
+            }
+        },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        footer = {
+            text = "Lavender Hub • " .. os.date("%H:%M:%S")
+        }
+    }
+    
+    local payload = {
+        username = "Lavender Hub",
+        embeds = {embed}
+    }
+    
+    local success, result = pcall(function()
+        local response = requestFunc({
+            Url = webhookURL,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode(payload)
+        })
+        return response
+    end)
+    
+    if success then
+        addToConsole("✅ Webhook sent successfully")
+        lastWebhookTime = currentTime
+    else
+        addToConsole("❌ Failed to send webhook: " .. tostring(result))
+    end
+end
+
 -- Toys System
 local mountainBoosterEnabled = false
 local blueBoosterEnabled = false
@@ -1273,7 +1382,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 
 local Window = Library:CreateWindow({
     Title = "Lavender Hub",
-    Footer = "v0.4 (Davi is a sigma)",
+    Footer = "v0.5 (sal is gay)",
     ToggleKeybind = Enum.KeyCode.RightControl,
     Center = true,
     AutoShow = true,
@@ -1455,6 +1564,56 @@ local AntiLagToggle = AntiLagGroupbox:AddToggle("AntiLagToggle", {
     end
 })
 
+-- Webhook Tab
+local WebhookTab = Window:AddTab("Webhook", "globe")
+local WebhookGroupbox = WebhookTab:AddLeftGroupbox("Webhook Settings")
+
+local WebhookToggle = WebhookGroupbox:AddToggle("WebhookToggle", {
+    Text = "Enable Webhook",
+    Default = false,
+    Callback = function(Value)
+        webhookEnabled = Value
+        saveSettings()
+        if Value then
+            addToConsole("Webhook enabled")
+        else
+            addToConsole("Webhook disabled")
+        end
+    end
+})
+
+local WebhookURLBox = WebhookGroupbox:AddInput("WebhookURL", {
+    Text = "Webhook URL",
+    Default = "",
+    Placeholder = "https://discord.com/api/webhooks/...",
+    Callback = function(Value)
+        webhookURL = Value
+        saveSettings()
+    end
+})
+
+local WebhookIntervalSlider = WebhookGroupbox:AddSlider("WebhookInterval", {
+    Text = "Send Interval (minutes)",
+    Default = 5,
+    Min = 1,
+    Max = 60,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(Value)
+        webhookInterval = Value
+        saveSettings()
+    end
+})
+
+WebhookGroupbox:AddButton("Send Test Webhook", function()
+    if webhookEnabled and webhookURL ~= "" then
+        addToConsole("Sending test webhook...")
+        sendWebhook()
+    else
+        addToConsole("❌ Enable webhook and set URL first")
+    end
+end)
+
 -- Toys Tab
 local ToysTab = Window:AddTab("Toys", "gift")
 
@@ -1617,10 +1776,12 @@ RunService.Heartbeat:Connect(function()
     autoEquipTools()
     updateToys()
     updateHoneyStats()
+    sendWebhook()
     
     -- Update status display
     local statusText = "Idle"
     local currentPollen = getCurrentPollen()
+    local currentHoney = getCurrentHoney()
     
     if toggles.autoFarm then
         if toggles.isFarming and toggles.atField then
@@ -1648,9 +1809,11 @@ end)
 spawn(function()
     while task.wait(1) do
         local currentPollen = getCurrentPollen()
+        local currentHoney = getCurrentHoney()
         
         WrappedLabel:SetText(string.format(
-            "Pollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s",
+            "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s",
+            formatNumber(currentHoney),
             formatNumber(currentPollen),
             toggles.field,
             displayHiveName,
@@ -1680,6 +1843,9 @@ WalkspeedToggle:Set(toggles.walkspeedEnabled)
 WalkspeedSlider:Set(toggles.walkspeed)
 AutoSprinklersToggle:Set(autoSprinklersEnabled)
 SprinklerDropdown:Set(selectedSprinkler)
+WebhookToggle:Set(webhookEnabled)
+WebhookURLBox:Set(webhookURL)
+WebhookIntervalSlider:Set(webhookInterval)
 
 -- AUTO CLAIM ALL HIVES ON STARTUP
 addToConsole("🚀 Lavender Hub v0.4 Starting...")
@@ -1695,6 +1861,7 @@ displayHiveName = ownedHive and "Hive" or "None"
 -- Initialize honey tracking
 honeyStats.startHoney = getCurrentHoney()
 honeyStats.currentHoney = honeyStats.startHoney
+honeyStats.lastHoneyValue = honeyStats.startHoney
 
 -- Run anti-lag on startup if enabled
 if toggles.antiLag then
@@ -1706,6 +1873,7 @@ addToConsole("✅ Lavender Hub Ready!")
 addToConsole("🎯 Auto Farm System Ready!")
 addToConsole("🚿 IMPROVED Auto Sprinklers System Ready!")
 addToConsole("💀 Death Respawn System Ready!")
+addToConsole("🌐 Webhook System Ready!")
 if ownedHive then
     addToConsole("🏠 Owned Hive: " .. ownedHive)
 else
