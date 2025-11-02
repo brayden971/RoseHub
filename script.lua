@@ -40,12 +40,12 @@ local fieldCoords = {
 
 -- Hive Coordinates
 local hiveCoords = {
-    ["Hive_1"] = Vector3.new(-2059.47, 75.35, 17.14),
-    ["Hive_2"] = Vector3.new(-2033.00, 75.35, 17.16),
-    ["Hive_3"] = Vector3.new(-2008.25, 75.35, 16.89),
-    ["Hive_4"] = Vector3.new(-1983.14, 75.35, 17.00),
-    ["Hive_5"] = Vector3.new(-1958.10, 75.35, 17.28),
-    ["Hive_6"] = Vector3.new(-1932.45, 75.35, 17.85)
+    ["Hive_1"] = Vector3.new(-2058.91, 75.37, 22.80),
+    ["Hive_2"] = Vector3.new(-2033.85, 75.37, 22.74),
+    ["Hive_3"] = Vector3.new(-2008.09, 75.37, 21.76),
+    ["Hive_4"] = Vector3.new(-1983.25, 75.37, 21.98),
+    ["Hive_5"] = Vector3.new(-1957.94, 75.37, 23.09),
+    ["Hive_6"] = Vector3.new(-1932.99, 75.37, 23.11)
 }
 
 -- Toggles and State
@@ -793,6 +793,46 @@ local function resetSprinklers()
     addToConsole("🔄 Sprinklers reset - ready for next placement")
 end
 
+-- Function to change field while farming
+local function changeFieldWhileFarming(newField)
+    if not toggles.autoFarm or not toggles.isFarming then return end
+    
+    local newFieldPos = fieldCoords[newField]
+    if not newFieldPos then return end
+    
+    addToConsole("🔄 Changing field to: " .. newField)
+    
+    -- Fire sprinkler remote once while tweening to unequip sprinklers
+    if autoSprinklersEnabled then
+        addToConsole("💦 Unequipping sprinklers during field change...")
+        useSprinklerRemote(toggles.field)
+    end
+    
+    -- Reset sprinklers when changing fields
+    resetSprinklers()
+    
+    -- Move to new field with selected movement method
+    if moveToPosition(newFieldPos) then
+        toggles.field = newField
+        toggles.atField = true
+        local initialPollen = getCurrentPollen()
+        toggles.lastPollenValue = initialPollen
+        toggles.lastPollenChangeTime = tick()
+        toggles.fieldArrivalTime = tick()
+        toggles.hasCollectedPollen = (initialPollen > 0)
+        
+        -- Place sprinklers when changing fields
+        if autoSprinklersEnabled then
+            addToConsole("🚿 Placing sprinklers at new field...")
+            placeSprinklers()
+        end
+        
+        addToConsole("✅ Arrived at new field: " .. newField)
+    else
+        addToConsole("❌ Failed to reach new field: " .. newField)
+    end
+end
+
 -- Death respawn system
 local function onCharacterDeath()
     if toggles.autoFarm and toggles.isFarming then
@@ -1032,40 +1072,6 @@ local function startFarming()
     else
         toggles.isFarming = false
         addToConsole("❌ Failed to reach field")
-    end
-end
-
--- Function to change field while farming
-local function changeFieldWhileFarming(newField)
-    if not toggles.autoFarm or not toggles.isFarming then return end
-    
-    local newFieldPos = fieldCoords[newField]
-    if not newFieldPos then return end
-    
-    addToConsole("🔄 Changing field to: " .. newField)
-    
-    -- Reset sprinklers when changing fields
-    resetSprinklers()
-    
-    -- Move to new field with selected movement method
-    if moveToPosition(newFieldPos) then
-        toggles.field = newField
-        toggles.atField = true
-        local initialPollen = getCurrentPollen()
-        toggles.lastPollenValue = initialPollen
-        toggles.lastPollenChangeTime = tick()
-        toggles.fieldArrivalTime = tick()
-        toggles.hasCollectedPollen = (initialPollen > 0)
-        
-        -- Place sprinklers when changing fields
-        if autoSprinklersEnabled then
-            addToConsole("🚿 Placing sprinklers at new field...")
-            placeSprinklers()
-        end
-        
-        addToConsole("✅ Arrived at new field: " .. newField)
-    else
-        addToConsole("❌ Failed to reach new field: " .. newField)
     end
 end
 
