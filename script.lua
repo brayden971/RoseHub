@@ -106,6 +106,7 @@ local placingSprinklers = false
 local sprinklersPlaced = false
 local sprinklerRetryCount = 0
 local MAX_SPRINKLER_RETRIES = 3
+local lastFieldBeforeConvert = nil -- Track which field we were at before converting
 
 -- Sprinkler configurations with exact placement patterns
 local sprinklerConfigs = {
@@ -684,7 +685,7 @@ end
 local function useSprinklerRemote(fieldName)
     local flowerPart = getFieldFlowerPart(fieldName)
     if not flowerPart then
-        addToConsole("❌ Could not find FlowerPart for field: " .. fieldName)
+        addToConsole("❌ Could not find FlowerPart")
         return false
     end
     
@@ -701,10 +702,8 @@ local function useSprinklerRemote(fieldName)
     end)
     
     if success then
-        addToConsole("💦 Used sprinkler in " .. fieldName)
         return true
     else
-        addToConsole("❌ Failed to use sprinkler in " .. fieldName .. ": " .. tostring(result))
         return false
     end
 end
@@ -717,6 +716,12 @@ local function placeSprinklers()
     if placingSprinklers then return end
     if not toggles.atField then return end
     
+    -- NEW: Don't place sprinklers if returning to same field after converting
+    if lastFieldBeforeConvert == toggles.field then
+        sprinklersPlaced = true
+        return
+    end
+    
     local currentTime = tick()
     if currentTime - lastSprinklerPlaceTime < sprinklerCooldown then return end
     
@@ -724,7 +729,6 @@ local function placeSprinklers()
     
     local config = sprinklerConfigs[selectedSprinkler]
     if not config then
-        addToConsole("❌ Invalid sprinkler config: " .. selectedSprinkler)
         placingSprinklers = false
         return
     end
@@ -738,12 +742,9 @@ local function placeSprinklers()
     local visitCount = currentFieldVisits[toggles.field]
     local placementCount = config.count
     
-    addToConsole("🚿 Placing " .. placementCount .. " sprinklers at " .. toggles.field .. " (visit #" .. visitCount .. ")")
-    
     -- Get field position for pattern calculation
     local fieldPos = fieldCoords[toggles.field]
     if not fieldPos then
-        addToConsole("❌ Could not find field position")
         placingSprinklers = false
         return
     end
@@ -770,18 +771,11 @@ local function placeSprinklers()
                     placed = true
                     break
                 else
-                    addToConsole("🔄 Retrying sprinkler placement... (" .. retry .. "/2)")
                     task.wait(0.5)
                 end
             end
             
-            if not placed then
-                addToConsole("❌ Failed to place sprinkler after retries")
-            end
-            
             task.wait(0.5) -- Increased delay between placements
-        else
-            addToConsole("❌ Could not reach sprinkler position")
         end
     end
     
@@ -789,13 +783,10 @@ local function placeSprinklers()
     if successfulPlacements > 0 then
         sprinklersPlaced = true
         sprinklerRetryCount = 0
-        addToConsole("✅ Successfully placed " .. successfulPlacements .. "/" .. placementCount .. " sprinklers")
     else
         sprinklerRetryCount = sprinklerRetryCount + 1
-        addToConsole("⚠️ Failed to place any sprinklers (retry " .. sprinklerRetryCount .. "/" .. MAX_SPRINKLER_RETRIES .. ")")
         
         if sprinklerRetryCount >= MAX_SPRINKLER_RETRIES then
-            addToConsole("🔧 Resetting sprinkler system due to repeated failures")
             resetSprinklers()
             sprinklerRetryCount = 0
         end
@@ -814,8 +805,6 @@ local function resetSprinklers()
     if currentFieldVisits[toggles.field] then
         currentFieldVisits[toggles.field] = 0
     end
-    
-    addToConsole("🔄 Sprinklers reset - ready for fresh placement")
 end
 
 -- IMPROVED: More reliable field changing with better sprinkler management
@@ -829,7 +818,6 @@ local function changeFieldWhileFarming(newField)
     
     -- IMPROVED: Fire sprinkler remote multiple times to ensure unequip
     if autoSprinklersEnabled then
-        addToConsole("💦 Unequipping sprinklers during field change...")
         for i = 1, 2 do
             useSprinklerRemote(toggles.field)
             task.wait(0.3)
@@ -854,13 +842,12 @@ local function changeFieldWhileFarming(newField)
         
         -- Place sprinklers when changing fields
         if autoSprinklersEnabled then
-            addToConsole("🚿 Placing sprinklers at new field...")
             placeSprinklers()
         end
         
-        addToConsole("✅ Arrived at new field: " .. newField)
+        addToConsole("✅ Arrived at new field")
     else
-        addToConsole("❌ Failed to reach new field: " .. newField)
+        addToConsole("❌ Failed to reach new field")
     end
 end
 
@@ -884,14 +871,13 @@ local function onCharacterDeath()
             -- Tween back to field immediately
             local fieldPos = fieldCoords[toggles.field]
             if fieldPos then
-                addToConsole("🔄 Respawning to field: " .. toggles.field)
+                addToConsole("🔄 Respawning to field")
                 if moveToPosition(fieldPos) then
                     toggles.atField = true
                     addToConsole("✅ Respawned to field successfully")
                     
                     -- IMPROVED: Better sprinkler placement after respawn
                     if autoSprinklersEnabled then
-                        addToConsole("🚿 Placing sprinklers after respawn")
                         task.wait(1)
                         for i = 1, 2 do
                             if useSprinklerRemote(toggles.field) then
@@ -1093,7 +1079,6 @@ local function startFarming()
         
         -- IMPROVED: Better sprinkler placement timing
         if autoSprinklersEnabled then
-            addToConsole("🚿 FIRST ACTION: Placing sprinklers at field...")
             task.wait(1) -- Wait a bit before placing
             placeSprinklers()
         end
@@ -1110,6 +1095,9 @@ end
 
 local function startConverting()
     if toggles.isConverting or not ownedHive then return end
+    
+    -- NEW: Remember which field we were at before converting
+    lastFieldBeforeConvert = toggles.field
     
     local hivePos = hiveCoords[ownedHive]
     if not hivePos then return end
