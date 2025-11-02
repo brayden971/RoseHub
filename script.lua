@@ -95,6 +95,21 @@ local honeyStats = {
     hourlyRate = 0
 }
 
+-- COMBAT SYSTEM - Auto Zombies
+local autoZombiesEnabled = false
+local lastZombieCheckTime = 0
+local currentZombieTarget = nil
+local zombieTokensCollected = 0
+local zombieCheckCounter = 0 -- For optimized checking
+
+-- List of all zombie names to look for
+local zombieNames = {
+    "Zombie",
+    "Flame Zombie", 
+    "Frosty Zombie",
+    "Giant Zombie"
+}
+
 local player = Players.LocalPlayer
 local events = ReplicatedStorage:WaitForChild("Events", 10)
 
@@ -603,30 +618,58 @@ local function performContinuousMovement()
     end
 end
 
--- COMBAT SYSTEM - Auto Zombies
-local autoZombiesEnabled = false
-local lastZombieCheckTime = 0
-local currentZombieTarget = nil
-local zombieTokensCollected = 0
-
--- Function to find nearest zombie
+-- OPTIMIZED Function to find nearest zombie
 local function findNearestZombie()
     local character = GetCharacter()
     local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
     if not humanoidRootPart then return nil end
     
     local nearestZombie = nil
-    local nearestDistance = math.huge
+    local nearestDistance = 10000 -- Increased to 10000 as requested
     
-    -- Search for zombies in workspace
-    for _, obj in pairs(workspace:GetDescendants()) do
-        if obj.Name:lower():find("zombie") and obj:IsA("Model") then
-            local zombieRoot = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head")
-            if zombieRoot then
-                local distance = (humanoidRootPart.Position - zombieRoot.Position).Magnitude
-                if distance < nearestDistance then
-                    nearestZombie = obj
-                    nearestDistance = distance
+    -- Only check specific collections to reduce lag
+    local collectionsToCheck = {
+        workspace:FindFirstChild("Enemies"),
+        workspace:FindFirstChild("Monsters"),
+        workspace:FindFirstChild("Zombies")
+    }
+    
+    -- Also check workspace directly but with counter to reduce lag
+    zombieCheckCounter = zombieCheckCounter + 1
+    local checkWorkspace = (zombieCheckCounter % 3 == 0) -- Only check workspace every 3 cycles
+    
+    for _, collection in ipairs(collectionsToCheck) do
+        if collection then
+            for _, obj in pairs(collection:GetChildren()) do
+                for _, zombieName in ipairs(zombieNames) do
+                    if obj.Name == zombieName and obj:IsA("Model") then
+                        local zombieRoot = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head") or obj:FindFirstChild("Torso")
+                        if zombieRoot then
+                            local distance = (humanoidRootPart.Position - zombieRoot.Position).Magnitude
+                            if distance < nearestDistance then
+                                nearestZombie = obj
+                                nearestDistance = distance
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Check workspace less frequently to reduce lag
+    if checkWorkspace then
+        for _, obj in pairs(workspace:GetChildren()) do
+            for _, zombieName in ipairs(zombieNames) do
+                if obj.Name == zombieName and obj:IsA("Model") then
+                    local zombieRoot = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head") or obj:FindFirstChild("Torso")
+                    if zombieRoot then
+                        local distance = (humanoidRootPart.Position - zombieRoot.Position).Magnitude
+                        if distance < nearestDistance then
+                            nearestZombie = obj
+                            nearestDistance = distance
+                        end
+                    end
                 end
             end
         end
@@ -641,7 +684,7 @@ local function moveToZombie(zombie)
     
     local character = GetCharacter()
     local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
-    local zombieRoot = zombie:FindFirstChild("HumanoidRootPart") or zombie:FindFirstChild("Head")
+    local zombieRoot = zombie:FindFirstChild("HumanoidRootPart") or zombie:FindFirstChild("Head") or zombie:FindFirstChild("Torso")
     
     if not humanoidRootPart or not zombieRoot then return false end
     
@@ -656,7 +699,9 @@ end
 
 -- Function to check if zombie is dead/removed
 local function isZombieDead(zombie)
-    return not zombie or not zombie.Parent or (zombie:FindFirstChild("Humanoid") and zombie.Humanoid.Health <= 0)
+    if not zombie or not zombie.Parent then return true end
+    local humanoid = zombie:FindFirstChild("Humanoid")
+    return humanoid and humanoid.Health <= 0
 end
 
 -- Function to collect tokens after zombie dies
@@ -673,7 +718,7 @@ local function collectZombieTokens(zombiePosition)
         for _, token in pairs(tokensFolder:GetChildren()) do
             if token:IsA("BasePart") and token:FindFirstChild("Token") then
                 local distance = (token.Position - player.Character.HumanoidRootPart.Position).Magnitude
-                if distance <= 30 then
+                if distance <= 50 then -- Increased range for token collection
                     addToConsole("💰 Collecting zombie token")
                     moveToPosition(token.Position)
                     zombieTokensCollected = zombieTokensCollected + 1
@@ -684,19 +729,20 @@ local function collectZombieTokens(zombiePosition)
     end
 end
 
--- Main Auto Zombies function
+-- OPTIMIZED Main Auto Zombies function
 local function updateAutoZombies()
     if not autoZombiesEnabled then return end
     if toggles.isFarming or toggles.isConverting then return end
     
     local currentTime = tick()
-    if currentTime - lastZombieCheckTime < 1 then return end -- Check every second
+    if currentTime - lastZombieCheckTime < 2 then return end -- Reduced frequency to every 2 seconds
     lastZombieCheckTime = currentTime
     
     -- If we have a current target, check if it's still alive
     if currentZombieTarget and currentZombieTarget.Parent then
         if isZombieDead(currentZombieTarget) then
-            local zombiePosition = currentZombieTarget:FindFirstChild("HumanoidRootPart") and currentZombieTarget.HumanoidRootPart.Position
+            local zombieRoot = currentZombieTarget:FindFirstChild("HumanoidRootPart") or currentZombieTarget:FindFirstChild("Head") or currentZombieTarget:FindFirstChild("Torso")
+            local zombiePosition = zombieRoot and zombieRoot.Position
             currentZombieTarget = nil
             if zombiePosition then
                 collectZombieTokens(zombiePosition)
@@ -711,9 +757,9 @@ local function updateAutoZombies()
     
     -- Find new zombie target
     local zombie, distance = findNearestZombie()
-    if zombie and distance < 10000 then -- Only target zombies within 100 studs
+    if zombie and distance < 10000 then -- Increased to 10000 as requested
         currentZombieTarget = zombie
-        addToConsole("🎯 Targeting zombie: " .. zombie.Name)
+        addToConsole("🎯 Targeting zombie: " .. zombie.Name .. " (" .. math.floor(distance) .. " studs away)")
         moveToZombie(zombie)
     else
         currentZombieTarget = nil
