@@ -95,7 +95,7 @@ local honeyStats = {
     hourlyRate = 0
 }
 
--- AUTO SPRINKLERS SYSTEM - FIXED
+-- AUTO SPRINKLERS SYSTEM - FIXED WITH PATTERNS
 local autoSprinklersEnabled = false
 local selectedSprinkler = "Basic Sprinkler"
 local sprinklerPlacementCount = 0
@@ -105,14 +105,56 @@ local currentFieldVisits = {} -- Track visits per field
 local placingSprinklers = false
 local sprinklersPlaced = false
 
--- Sprinkler configurations - number of placements needed
+-- Sprinkler configurations with exact placement patterns
 local sprinklerConfigs = {
-    ["Broken Sprinkler"] = 1,
-    ["Basic Sprinkler"] = 1,
-    ["Silver Soakers"] = 2,
-    ["Golden Gushers"] = 3,
-    ["Diamond Drenchers"] = 4,
-    ["Supreme Saturator"] = 1
+    ["Broken Sprinkler"] = {
+        count = 1,
+        pattern = function(fieldPos)
+            return {fieldPos} -- Center
+        end
+    },
+    ["Basic Sprinkler"] = {
+        count = 1,
+        pattern = function(fieldPos)
+            return {fieldPos} -- Center
+        end
+    },
+    ["Silver Soakers"] = {
+        count = 2,
+        pattern = function(fieldPos)
+            return {
+                fieldPos + Vector3.new(-2, 0, 0),  -- Left 4 studs
+                fieldPos + Vector3.new(2, 0, 0)    -- Right 4 studs
+            }
+        end
+    },
+    ["Golden Gushers"] = {
+        count = 3,
+        pattern = function(fieldPos)
+            return {
+                fieldPos + Vector3.new(-2, 0, 0),  -- Left 4 studs
+                fieldPos + Vector3.new(2, 0, 0),   -- Right 4 studs
+                fieldPos + Vector3.new(0, 0, -1.5) -- Down 3 studs (middle)
+            }
+        end
+    },
+    ["Diamond Drenchers"] = {
+        count = 4,
+        pattern = function(fieldPos)
+            return {
+                fieldPos + Vector3.new(-2, 0, -2),  -- Top Left
+                fieldPos + Vector3.new(2, 0, -2),   -- Top Right
+                fieldPos + Vector3.new(-2, 0, 2),   -- Bottom Left
+                fieldPos + Vector3.new(2, 0, 2)     -- Bottom Right
+            }
+        end
+    },
+    ["Supreme Saturator"] = {
+        count = 1,
+        pattern = function(fieldPos)
+            return {fieldPos} -- Center
+        end
+    }
 }
 
 local player = Players.LocalPlayer
@@ -627,7 +669,7 @@ local function performContinuousMovement()
     end
 end
 
--- COMPLETELY FIXED AUTO SPRINKLERS SYSTEM USING REMOTE
+-- COMPLETELY FIXED AUTO SPRINKLERS SYSTEM WITH EXACT PATTERNS
 local function getFieldFlowerPart(fieldName)
     local fieldsFolder = workspace:WaitForChild("Fields")
     local field = fieldsFolder:WaitForChild(fieldName)
@@ -691,14 +733,29 @@ local function placeSprinklers()
     currentFieldVisits[toggles.field] = currentFieldVisits[toggles.field] + 1
     
     local visitCount = currentFieldVisits[toggles.field]
-    local placementCount = config
+    local placementCount = config.count
     
-    addToConsole("🚿 Placing sprinklers at " .. toggles.field .. " (visit #" .. visitCount .. ")")
+    addToConsole("🚿 Placing " .. placementCount .. " sprinklers at " .. toggles.field .. " (visit #" .. visitCount .. ")")
+    
+    -- Get field position for pattern calculation
+    local fieldPos = fieldCoords[toggles.field]
+    if not fieldPos then
+        addToConsole("❌ Could not find field position")
+        placingSprinklers = false
+        return
+    end
+    
+    -- Get sprinkler positions based on exact pattern
+    local positions = config.pattern(fieldPos)
     
     -- FIRST VISIT: Place the normal amount (no extra fire needed)
     if visitCount == 1 then
-        addToConsole("🔄 First visit - placing " .. placementCount .. " sprinklers")
-        for i = 1, placementCount do
+        addToConsole("🔄 First visit - placing " .. placementCount .. " sprinklers in pattern")
+        for i, position in ipairs(positions) do
+            if i > placementCount then break end
+            -- Move to each position and place sprinkler
+            moveToPosition(position)
+            task.wait(0.5)
             if useSprinklerRemote(toggles.field) then
                 sprinklerPlacementCount = sprinklerPlacementCount + 1
             end
@@ -706,13 +763,17 @@ local function placeSprinklers()
         end
     -- SECOND VISIT or DIFFERENT FIELD: Fire remote once to clear, then place normally
     else
-        addToConsole("🔄 Subsequent visit - clearing then placing " .. placementCount .. " sprinklers")
+        addToConsole("🔄 Subsequent visit - clearing then placing " .. placementCount .. " sprinklers in pattern")
         -- Fire remote once to clear existing sprinklers
         useSprinklerRemote(toggles.field)
         task.wait(0.5)
         
-        -- Place normally
-        for i = 1, placementCount do
+        -- Place in pattern
+        for i, position in ipairs(positions) do
+            if i > placementCount then break end
+            -- Move to each position and place sprinkler
+            moveToPosition(position)
+            task.wait(0.5)
             if useSprinklerRemote(toggles.field) then
                 sprinklerPlacementCount = sprinklerPlacementCount + 1
             end
@@ -723,7 +784,7 @@ local function placeSprinklers()
     lastSprinklerPlaceTime = currentTime
     sprinklersPlaced = true
     placingSprinklers = false
-    addToConsole("✅ Finished sprinkler placement")
+    addToConsole("✅ Finished sprinkler placement with pattern")
 end
 
 -- Reset sprinklers when changing fields or after converting
@@ -1263,7 +1324,7 @@ local AutoEquipToggle = FarmingGroupbox:AddToggle("AutoEquipToggle", {
     end
 })
 
--- AUTO SPRINKLERS - COMPLETELY FIXED
+-- AUTO SPRINKLERS - COMPLETELY FIXED WITH PATTERNS
 local AutoSprinklersToggle = FarmingGroupbox:AddToggle("AutoSprinklersToggle", {
     Text = "Auto Sprinklers",
     Default = false,
