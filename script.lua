@@ -102,15 +102,17 @@ local sprinklerPlacementCount = 0
 local lastSprinklerPlaceTime = 0
 local sprinklerCooldown = 2 -- seconds between placements
 local currentFieldVisits = {} -- Track visits per field
+local placingSprinklers = false
+local sprinklersPlaced = false
 
--- Sprinkler configurations - SIMPLIFIED
+-- Sprinkler configurations - number of placements needed
 local sprinklerConfigs = {
-    ["Broken Sprinkler"] = {count = 1},
-    ["Basic Sprinkler"] = {count = 1},
-    ["Silver Soakers"] = {count = 2},
-    ["Golden Gushers"] = {count = 3},
-    ["Diamond Drenchers"] = {count = 4},
-    ["Supreme Saturator"] = {count = 1}
+    ["Broken Sprinkler"] = 1,
+    ["Basic Sprinkler"] = 1,
+    ["Silver Soakers"] = 2,
+    ["Golden Gushers"] = 3,
+    ["Diamond Drenchers"] = 4,
+    ["Supreme Saturator"] = 1
 }
 
 local player = Players.LocalPlayer
@@ -625,112 +627,60 @@ local function performContinuousMovement()
     end
 end
 
--- COMPLETELY FIXED AUTO SPRINKLERS SYSTEM
-local function findSprinklerTool()
-    local character = GetCharacter()
-    local backpack = player:FindFirstChild("Backpack")
-    
-    if not character or not backpack then return nil end
-    
-    -- Look for sprinkler tool names that match the selected sprinkler
-    local sprinklerNames = {
-        ["Broken Sprinkler"] = {"Broken Sprinkler", "BrokenSprinkler"},
-        ["Basic Sprinkler"] = {"Basic Sprinkler", "BasicSprinkler", "Sprinkler"},
-        ["Silver Soakers"] = {"Silver Soakers", "SilverSoakers"},
-        ["Golden Gushers"] = {"Golden Gushers", "GoldenGushers"},
-        ["Diamond Drenchers"] = {"Diamond Drenchers", "DiamondDrenchers"},
-        ["Supreme Saturator"] = {"Supreme Saturator", "SupremeSaturator"}
-    }
-    
-    local namesToCheck = sprinklerNames[selectedSprinkler] or {selectedSprinkler}
-    
-    -- Check character first
-    for _, tool in pairs(character:GetChildren()) do
-        if tool:IsA("Tool") then
-            for _, name in ipairs(namesToCheck) do
-                if tool.Name == name then
-                    return tool
-                end
-            end
-        end
+-- COMPLETELY FIXED AUTO SPRINKLERS SYSTEM USING REMOTE
+local function getFieldFlowerPart(fieldName)
+    local fieldsFolder = workspace:WaitForChild("Fields")
+    local field = fieldsFolder:WaitForChild(fieldName)
+    if field then
+        return field:WaitForChild("FlowerPart")
     end
-    
-    -- Check backpack
-    for _, tool in pairs(backpack:GetChildren()) do
-        if tool:IsA("Tool") then
-            for _, name in ipairs(namesToCheck) do
-                if tool.Name == name then
-                    return tool
-                end
-            end
-        end
-    end
-    
     return nil
 end
 
-local function useSprinkler()
-    local character = GetCharacter()
-    local sprinklerTool = findSprinklerTool()
-    
-    if not sprinklerTool then
-        addToConsole("❌ No sprinkler tool found: " .. selectedSprinkler)
+local function useSprinklerRemote(fieldName)
+    local flowerPart = getFieldFlowerPart(fieldName)
+    if not flowerPart then
+        addToConsole("❌ Could not find FlowerPart for field: " .. fieldName)
         return false
     end
     
-    -- Make sure tool is equipped
-    if sprinklerTool.Parent ~= character then
-        local humanoid = character:FindFirstChild("Humanoid")
-        if humanoid then
-            humanoid:EquipTool(sprinklerTool)
-            task.wait(0.5)
-        end
-    end
+    local useItemRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("UseItem")
     
-    -- Find and use the remote
-    local remote = sprinklerTool:FindFirstChild("Remote") or sprinklerTool:FindFirstChild("ToolRemote") or sprinklerTool:FindFirstChild("ClickRemote")
-    if remote then
-        -- Try with current field name
-        local success = pcall(function()
-            remote:FireServer(toggles.field)
-        end)
-        
-        if not success then
-            -- Try with Mushroom Field (common fallback)
-            success = pcall(function()
-                remote:FireServer("Mushroom Field")
-            end)
-        end
-        
-        if not success then
-            -- Try without arguments
-            success = pcall(function()
-                remote:FireServer()
-            end)
-        end
-        
-        if success then
-            addToConsole("💦 Used sprinkler: " .. sprinklerTool.Name)
-            return true
-        else
-            addToConsole("❌ Failed to use sprinkler remote")
-        end
+    local args = {
+        "Sprinkler",
+        flowerPart
+    }
+    
+    local success = pcall(function()
+        useItemRemote:FireServer(unpack(args))
+    end)
+    
+    if success then
+        addToConsole("💦 Used sprinkler in " .. fieldName)
+        return true
     else
-        addToConsole("❌ No remote found in sprinkler tool")
+        addToConsole("❌ Failed to use sprinkler in " .. fieldName)
+        return false
     end
-    
-    return false
 end
 
 local function placeSprinklers()
-    if not autoSprinklersEnabled or not toggles.atField then return end
+    if not autoSprinklersEnabled then return end
+    if not toggles.autoFarm then return end
+    if toggles.isConverting then return end
+    if placingSprinklers then return end
+    if sprinklersPlaced then return end
+    if not toggles.atField then return end
     
     local currentTime = tick()
     if currentTime - lastSprinklerPlaceTime < sprinklerCooldown then return end
     
+    placingSprinklers = true
+    
     local config = sprinklerConfigs[selectedSprinkler]
     if not config then
         addToConsole("❌ Invalid sprinkler config: " .. selectedSprinkler)
+        placingSprinklers = false
         return
     end
     
@@ -741,41 +691,29 @@ local function placeSprinklers()
     currentFieldVisits[toggles.field] = currentFieldVisits[toggles.field] + 1
     
     local visitCount = currentFieldVisits[toggles.field]
-    local placementCount = config.count
+    local placementCount = config
     
     addToConsole("🚿 Placing sprinklers at " .. toggles.field .. " (visit #" .. visitCount .. ")")
     
-    -- FIRST VISIT: Place 3 times instantly
+    -- FIRST VISIT: Place the normal amount (no extra fire needed)
     if visitCount == 1 then
-        addToConsole("🔄 First visit - placing 3 times instantly")
-        for i = 1, 3 do
-            if useSprinkler() then
+        addToConsole("🔄 First visit - placing " .. placementCount .. " sprinklers")
+        for i = 1, placementCount do
+            if useSprinklerRemote(toggles.field) then
                 sprinklerPlacementCount = sprinklerPlacementCount + 1
             end
             task.wait(0.3)
         end
-    -- SECOND VISIT or DIFFERENT FIELD: Unequip once then place normally
-    elseif visitCount == 2 then
-        addToConsole("🔄 Second visit - unequipping then placing normally")
-        -- Unequip by moving tool to backpack
-        local sprinklerTool = findSprinklerTool()
-        if sprinklerTool and sprinklerTool.Parent == GetCharacter() then
-            sprinklerTool.Parent = player:FindFirstChild("Backpack")
-            task.wait(0.5)
-        end
+    -- SECOND VISIT or DIFFERENT FIELD: Fire remote once to clear, then place normally
+    else
+        addToConsole("🔄 Subsequent visit - clearing then placing " .. placementCount .. " sprinklers")
+        -- Fire remote once to clear existing sprinklers
+        useSprinklerRemote(toggles.field)
+        task.wait(0.5)
         
         -- Place normally
         for i = 1, placementCount do
-            if useSprinkler() then
-                sprinklerPlacementCount = sprinklerPlacementCount + 1
-            end
-            task.wait(0.3)
-        end
-    -- SUBSEQUENT VISITS: Place normally
-    else
-        addToConsole("🔄 Subsequent visit - placing normally")
-        for i = 1, placementCount do
-            if useSprinkler() then
+            if useSprinklerRemote(toggles.field) then
                 sprinklerPlacementCount = sprinklerPlacementCount + 1
             end
             task.wait(0.3)
@@ -783,7 +721,15 @@ local function placeSprinklers()
     end
     
     lastSprinklerPlaceTime = currentTime
+    sprinklersPlaced = true
+    placingSprinklers = false
     addToConsole("✅ Finished sprinkler placement")
+end
+
+-- Reset sprinklers when changing fields or after converting
+local function resetSprinklers()
+    sprinklersPlaced = false
+    addToConsole("🔄 Sprinklers reset - ready for next placement")
 end
 
 -- Death respawn system
@@ -800,6 +746,9 @@ local function onCharacterDeath()
             -- Wait for character to fully load
             task.wait(2)
             
+            -- Reset sprinklers since they get unequipped on death
+            resetSprinklers()
+            
             -- Tween back to field immediately
             local fieldPos = fieldCoords[toggles.field]
             if fieldPos then
@@ -808,15 +757,16 @@ local function onCharacterDeath()
                     toggles.atField = true
                     addToConsole("✅ Respawned to field successfully")
                     
-                    -- After respawning, sprinklers are unequipped so we need to place 3 times
+                    -- After respawning, place sprinklers 3 times since they get unequipped
                     if autoSprinklersEnabled then
                         addToConsole("🚿 Placing sprinklers after respawn (3 times)")
                         for i = 1, 3 do
-                            if useSprinkler() then
+                            if useSprinklerRemote(toggles.field) then
                                 sprinklerPlacementCount = sprinklerPlacementCount + 1
                             end
                             task.wait(0.3)
                         end
+                        sprinklersPlaced = true
                     end
                 else
                     addToConsole("❌ Failed to respawn to field")
@@ -1033,6 +983,9 @@ local function changeFieldWhileFarming(newField)
     
     addToConsole("🔄 Changing field to: " .. newField)
     
+    -- Reset sprinklers when changing fields
+    resetSprinklers()
+    
     -- Move to new field with selected movement method
     if moveToPosition(newFieldPos) then
         toggles.field = newField
@@ -1120,6 +1073,8 @@ local function updateFarmState()
     elseif toggles.isConverting and toggles.atHive then
         if shouldReturnToField() then
             addToConsole("Returning to field")
+            -- Reset sprinklers when returning to field
+            resetSprinklers()
             startFarming()
         end
     end
@@ -1319,6 +1274,7 @@ local AutoSprinklersToggle = FarmingGroupbox:AddToggle("AutoSprinklersToggle", {
             addToConsole("🚿 Auto Sprinklers enabled")
             sprinklerPlacementCount = 0
             currentFieldVisits = {} -- Reset visits when enabling
+            resetSprinklers()
         else
             addToConsole("🚿 Auto Sprinklers disabled")
         end
