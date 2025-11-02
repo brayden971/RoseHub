@@ -110,6 +110,65 @@ local zombieNames = {
     "Giant Zombie"
 }
 
+-- AUTO SPRINKLERS SYSTEM
+local autoSprinklersEnabled = false
+local selectedSprinkler = "Basic Sprinkler"
+local sprinklerPlacementCount = 0
+local lastSprinklerPlaceTime = 0
+local sprinklerCooldown = 2 -- seconds between placements
+
+-- Sprinkler configurations
+local sprinklerConfigs = {
+    ["Broken Sprinkler"] = {
+        count = 1,
+        pattern = function(fieldPos)
+            return {fieldPos}
+        end
+    },
+    ["Basic Sprinkler"] = {
+        count = 1,
+        pattern = function(fieldPos)
+            return {fieldPos}
+        end
+    },
+    ["Silver Soakers"] = {
+        count = 2,
+        pattern = function(fieldPos)
+            return {
+                fieldPos + Vector3.new(3, 0, 0),  -- Right
+                fieldPos + Vector3.new(-3, 0, 0)  -- Left
+            }
+        end
+    },
+    ["Golden Gushers"] = {
+        count = 3,
+        pattern = function(fieldPos)
+            return {
+                fieldPos + Vector3.new(3, 0, 0),   -- Right
+                fieldPos + Vector3.new(-3, 0, 0),  -- Left
+                fieldPos + Vector3.new(0, 0, -3)   -- Down
+            }
+        end
+    },
+    ["Diamond Drenchers"] = {
+        count = 4,
+        pattern = function(fieldPos)
+            return {
+                fieldPos + Vector3.new(3, 0, 3),    -- Top Right
+                fieldPos + Vector3.new(-3, 0, 3),   -- Top Left
+                fieldPos + Vector3.new(3, 0, -3),   -- Bottom Right
+                fieldPos + Vector3.new(-3, 0, -3)   -- Bottom Left
+            }
+        end
+    },
+    ["Supreme Saturator"] = {
+        count = 1,
+        pattern = function(fieldPos)
+            return {fieldPos}
+        end
+    }
+}
+
 local player = Players.LocalPlayer
 local events = ReplicatedStorage:WaitForChild("Events", 10)
 
@@ -150,7 +209,9 @@ local function saveSettings()
         antiLag = toggles.antiLag,
         tweenSpeed = toggles.tweenSpeed,
         walkspeedEnabled = toggles.walkspeedEnabled,
-        walkspeed = toggles.walkspeed
+        walkspeed = toggles.walkspeed,
+        autoSprinklersEnabled = autoSprinklersEnabled,
+        selectedSprinkler = selectedSprinkler
     }
     
     local success, encoded = pcall(function()
@@ -190,6 +251,8 @@ local function loadSettings()
             toggles.tweenSpeed = decoded.tweenSpeed or toggles.tweenSpeed
             toggles.walkspeedEnabled = decoded.walkspeedEnabled or toggles.walkspeedEnabled
             toggles.walkspeed = decoded.walkspeed or toggles.walkspeed
+            autoSprinklersEnabled = decoded.autoSprinklersEnabled or autoSprinklersEnabled
+            selectedSprinkler = decoded.selectedSprinkler or selectedSprinkler
             addToConsole("Settings loaded")
             return true
         end
@@ -618,6 +681,137 @@ local function performContinuousMovement()
     end
 end
 
+-- AUTO SPRINKLERS SYSTEM FUNCTIONS
+local function unequipSprinkler()
+    local character = GetCharacter()
+    local backpack = player:FindFirstChild("Backpack")
+    
+    if character and backpack then
+        -- Look for sprinkler tool in character and unequip it
+        for _, tool in pairs(character:GetChildren()) do
+            if tool:IsA("Tool") and string.find(tool.Name:lower(), "sprinkler") then
+                tool.Parent = backpack
+                addToConsole("🔧 Unequipped sprinkler: " .. tool.Name)
+                return true
+            end
+        end
+        
+        -- Look for sprinkler tool in backpack
+        for _, tool in pairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") and string.find(tool.Name:lower(), "sprinkler") then
+                addToConsole("🔧 Sprinkler found in backpack: " .. tool.Name)
+                return true
+            end
+        end
+    end
+    
+    return false
+end
+
+local function equipSprinkler()
+    local character = GetCharacter()
+    local humanoid = character and character:FindFirstChild("Humanoid")
+    local backpack = player:FindFirstChild("Backpack")
+    
+    if not humanoid or not backpack then return false end
+    
+    -- Look for sprinkler tool in backpack
+    for _, tool in pairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") and string.find(tool.Name:lower(), "sprinkler") then
+            humanoid:EquipTool(tool)
+            addToConsole("🔧 Equipped sprinkler: " .. tool.Name)
+            task.wait(0.5)
+            return true
+        end
+    end
+    
+    return false
+end
+
+local function placeSprinklerAtPosition(position)
+    local character = GetCharacter()
+    local humanoid = character and character:FindFirstChild("Humanoid")
+    
+    if not humanoid then return false end
+    
+    -- Move to the position first
+    moveToPosition(position)
+    task.wait(0.5)
+    
+    -- Find equipped sprinkler tool
+    local sprinklerTool = nil
+    for _, tool in pairs(character:GetChildren()) do
+        if tool:IsA("Tool") and string.find(tool.Name:lower(), "sprinkler") then
+            sprinklerTool = tool
+            break
+        end
+    end
+    
+    if sprinklerTool then
+        -- Use the sprinkler (this will place it)
+        local remote = sprinklerTool:FindFirstChild("Remote") or sprinklerTool:FindFirstChild("ToolRemote")
+        if remote then
+            -- Get current field name for the placement
+            local currentField = toggles.field
+            if currentField == "Mushroom Field" then
+                currentField = "Mushroom Field"
+            else
+                currentField = "Mushroom Field" -- Default to Mushroom Field as mentioned
+            end
+            
+            local args = {currentField}
+            remote:FireServer(unpack(args))
+            addToConsole("💦 Placed sprinkler at position: " .. math.floor(position.X) .. ", " .. math.floor(position.Y) .. ", " .. math.floor(position.Z))
+            task.wait(0.5)
+            return true
+        end
+    end
+    
+    return false
+end
+
+local function placeSprinklers()
+    if not autoSprinklersEnabled or not toggles.atField then return end
+    
+    local currentTime = tick()
+    if currentTime - lastSprinklerPlaceTime < sprinklerCooldown then return end
+    
+    local fieldPos = fieldCoords[toggles.field]
+    if not fieldPos then return end
+    
+    local config = sprinklerConfigs[selectedSprinkler]
+    if not config then return end
+    
+    addToConsole("🚿 Starting sprinkler placement: " .. selectedSprinkler)
+    
+    -- Get sprinkler positions based on pattern
+    local positions = config.pattern(fieldPos)
+    
+    -- Handle the glitch by unequipping and re-equipping
+    if sprinklerPlacementCount > 0 then
+        addToConsole("🔄 Handling sprinkler glitch - re-equipping...")
+        unequipSprinkler()
+        task.wait(0.5)
+    end
+    
+    -- Equip sprinkler
+    if equipSprinkler() then
+        -- Place sprinklers at each position
+        for i, position in ipairs(positions) do
+            if i > config.count then break end -- Don't place more than configured
+            
+            placeSprinklerAtPosition(position)
+            task.wait(0.5)
+        end
+        
+        sprinklerPlacementCount = sprinklerPlacementCount + 1
+        lastSprinklerPlaceTime = currentTime
+        addToConsole("✅ Sprinklers placed successfully (placement #" .. sprinklerPlacementCount .. ")")
+    else
+        addToConsole("❌ No sprinkler tool found in backpack")
+    end
+end
+
 -- OPTIMIZED Function to find nearest zombie
 local function findNearestZombie()
     local character = GetCharacter()
@@ -929,6 +1123,12 @@ local function startFarming()
         
         addToConsole("✅ Arrived at field")
         
+        -- Place sprinklers when arriving at field
+        if autoSprinklersEnabled then
+            addToConsole("🚿 Placing sprinklers at field...")
+            placeSprinklers()
+        end
+        
         -- Start auto-dig if enabled
         if toggles.autoDig then
             spawn(DigLoop)
@@ -957,6 +1157,12 @@ local function changeFieldWhileFarming(newField)
         toggles.lastPollenChangeTime = tick()
         toggles.fieldArrivalTime = tick()
         toggles.hasCollectedPollen = (initialPollen > 0)
+        
+        -- Place sprinklers when changing fields
+        if autoSprinklersEnabled then
+            addToConsole("🚿 Placing sprinklers at new field...")
+            placeSprinklers()
+        end
         
         addToConsole("✅ Arrived at new field: " .. newField)
     else
@@ -1217,6 +1423,34 @@ local AutoEquipToggle = FarmingGroupbox:AddToggle("AutoEquipToggle", {
     end
 })
 
+-- AUTO SPRINKLERS - NEW ADDITION
+local AutoSprinklersToggle = FarmingGroupbox:AddToggle("AutoSprinklersToggle", {
+    Text = "Auto Sprinklers",
+    Default = false,
+    Callback = function(Value)
+        autoSprinklersEnabled = Value
+        saveSettings()
+        if Value then
+            addToConsole("🚿 Auto Sprinklers enabled")
+            sprinklerPlacementCount = 0
+        else
+            addToConsole("🚿 Auto Sprinklers disabled")
+        end
+    end
+})
+
+local SprinklerDropdown = FarmingGroupbox:AddDropdown("SprinklerDropdown", {
+    Values = {"Broken Sprinkler", "Basic Sprinkler", "Silver Soakers", "Golden Gushers", "Diamond Drenchers", "Supreme Saturator"},
+    Default = 2,
+    Multi = false,
+    Text = "Sprinkler Type",
+    Callback = function(Value)
+        selectedSprinkler = Value
+        saveSettings()
+        addToConsole("🚿 Sprinkler type set to: " .. Value)
+    end
+})
+
 -- Movement Settings
 local MovementGroupbox = MainTab:AddRightGroupbox("Movement")
 local MovementMethodDropdown = MovementGroupbox:AddDropdown("MovementMethod", {
@@ -1289,7 +1523,7 @@ local AntiLagToggle = AntiLagGroupbox:AddToggle("AntiLagToggle", {
     end
 })
 
--- COMBAT TAB - NEW ADDITION
+-- COMBAT TAB
 local CombatTab = Window:AddTab("Combat", "sword")
 
 -- Combat Settings
@@ -1422,11 +1656,20 @@ DebugActionsGroupbox:AddButton("Equip Tools", function()
     addToConsole("Manually equipped all tools")
 end)
 
+DebugActionsGroupbox:AddButton("Place Sprinklers", function()
+    if autoSprinklersEnabled then
+        placeSprinklers()
+    else
+        addToConsole("Enable Auto Sprinklers first")
+    end
+end)
+
 -- Status Groupbox
 local StatusGroupbox = MainTab:AddRightGroupbox("Status")
 local StatusLabel = StatusGroupbox:AddLabel("Status: Idle")
 local PollenLabel = StatusGroupbox:AddLabel("Pollen: 0")
 local HourlyHoneyLabel = StatusGroupbox:AddLabel("Hourly Honey: 0")
+local SprinklerStatusLabel = StatusGroupbox:AddLabel("Sprinklers: 0 placed")
 
 -- UI Settings Tab
 local UISettingsTab = Window:AddTab("UI Settings", "settings")
@@ -1458,7 +1701,7 @@ RunService.Heartbeat:Connect(function()
     autoEquipTools()
     updateToys()
     updateHoneyStats()
-    updateAutoZombies() -- NEW: Added Auto Zombies update
+    updateAutoZombies()
     
     -- Update status display
     local statusText = "Idle"
@@ -1487,6 +1730,7 @@ RunService.Heartbeat:Connect(function()
     StatusLabel:SetText("Status: " .. statusText)
     PollenLabel:SetText("Pollen: " .. formatNumber(currentPollen))
     HourlyHoneyLabel:SetText("Hourly Honey: " .. formatNumber(honeyStats.hourlyRate))
+    SprinklerStatusLabel:SetText("Sprinklers: " .. sprinklerPlacementCount .. " placed")
     
     -- Update zombie stats
     ZombiesKilledLabel:SetText("Tokens Collected: " .. zombieTokensCollected)
@@ -1503,7 +1747,7 @@ spawn(function()
         local currentPollen = getCurrentPollen()
         
         WrappedLabel:SetText(string.format(
-            "Pollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Zombies: %s",
+            "Pollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Zombies: %s\nAuto Sprinklers: %s\nSprinkler Type: %s",
             formatNumber(currentPollen),
             toggles.field,
             displayHiveName,
@@ -1512,7 +1756,9 @@ spawn(function()
             toggles.autoEquip and "ON" or "OFF",
             toggles.antiLag and "ON" or "OFF",
             formatNumber(honeyStats.hourlyRate),
-            autoZombiesEnabled and "ON" or "OFF"
+            autoZombiesEnabled and "ON" or "OFF",
+            autoSprinklersEnabled and "ON" or "OFF",
+            selectedSprinkler
         ))
     end
 end)
@@ -1530,6 +1776,8 @@ MovementMethodDropdown:Set(toggles.movementMethod)
 TweenSpeedSlider:Set(toggles.tweenSpeed)
 WalkspeedToggle:Set(toggles.walkspeedEnabled)
 WalkspeedSlider:Set(toggles.walkspeed)
+AutoSprinklersToggle:Set(autoSprinklersEnabled)
+SprinklerDropdown:Set(selectedSprinkler)
 
 -- AUTO CLAIM ALL HIVES ON STARTUP
 addToConsole("🚀 Lavender Hub v0.4 Starting...")
@@ -1555,6 +1803,7 @@ end
 addToConsole("✅ Lavender Hub Ready!")
 addToConsole("🎯 Auto Farm System Ready!")
 addToConsole("🧟 Auto Zombies System Ready!")
+addToConsole("🚿 Auto Sprinklers System Ready!")
 if ownedHive then
     addToConsole("🏠 Owned Hive: " .. ownedHive)
 else
