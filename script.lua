@@ -603,6 +603,123 @@ local function performContinuousMovement()
     end
 end
 
+-- COMBAT SYSTEM - Auto Zombies
+local autoZombiesEnabled = false
+local lastZombieCheckTime = 0
+local currentZombieTarget = nil
+local zombieTokensCollected = 0
+
+-- Function to find nearest zombie
+local function findNearestZombie()
+    local character = GetCharacter()
+    local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then return nil end
+    
+    local nearestZombie = nil
+    local nearestDistance = math.huge
+    
+    -- Search for zombies in workspace
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj.Name:lower():find("zombie") and obj:IsA("Model") then
+            local zombieRoot = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head")
+            if zombieRoot then
+                local distance = (humanoidRootPart.Position - zombieRoot.Position).Magnitude
+                if distance < nearestDistance then
+                    nearestZombie = obj
+                    nearestDistance = distance
+                end
+            end
+        end
+    end
+    
+    return nearestZombie, nearestDistance
+end
+
+-- Function to move to zombie position but keep 5 studs distance
+local function moveToZombie(zombie)
+    if not zombie or not zombie.Parent then return false end
+    
+    local character = GetCharacter()
+    local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
+    local zombieRoot = zombie:FindFirstChild("HumanoidRootPart") or zombie:FindFirstChild("Head")
+    
+    if not humanoidRootPart or not zombieRoot then return false end
+    
+    -- Calculate position 5 studs away from zombie
+    local direction = (humanoidRootPart.Position - zombieRoot.Position).Unit
+    local targetPosition = zombieRoot.Position + (direction * 5)
+    targetPosition = Vector3.new(targetPosition.X, humanoidRootPart.Position.Y, targetPosition.Z)
+    
+    -- Move to the calculated position
+    return moveToPosition(targetPosition)
+end
+
+-- Function to check if zombie is dead/removed
+local function isZombieDead(zombie)
+    return not zombie or not zombie.Parent or (zombie:FindFirstChild("Humanoid") and zombie.Humanoid.Health <= 0)
+end
+
+-- Function to collect tokens after zombie dies
+local function collectZombieTokens(zombiePosition)
+    addToConsole("🎯 Zombie defeated! Collecting tokens...")
+    
+    -- Move to where the zombie was
+    moveToPosition(zombiePosition)
+    task.wait(1)
+    
+    -- Look for nearby tokens
+    local tokensFolder = workspace:FindFirstChild("Debris") and workspace.Debris:FindFirstChild("Tokens")
+    if tokensFolder then
+        for _, token in pairs(tokensFolder:GetChildren()) do
+            if token:IsA("BasePart") and token:FindFirstChild("Token") then
+                local distance = (token.Position - player.Character.HumanoidRootPart.Position).Magnitude
+                if distance <= 30 then
+                    addToConsole("💰 Collecting zombie token")
+                    moveToPosition(token.Position)
+                    zombieTokensCollected = zombieTokensCollected + 1
+                    task.wait(0.5)
+                end
+            end
+        end
+    end
+end
+
+-- Main Auto Zombies function
+local function updateAutoZombies()
+    if not autoZombiesEnabled then return end
+    if toggles.isFarming or toggles.isConverting then return end
+    
+    local currentTime = tick()
+    if currentTime - lastZombieCheckTime < 1 then return end -- Check every second
+    lastZombieCheckTime = currentTime
+    
+    -- If we have a current target, check if it's still alive
+    if currentZombieTarget and currentZombieTarget.Parent then
+        if isZombieDead(currentZombieTarget) then
+            local zombiePosition = currentZombieTarget:FindFirstChild("HumanoidRootPart") and currentZombieTarget.HumanoidRootPart.Position
+            currentZombieTarget = nil
+            if zombiePosition then
+                collectZombieTokens(zombiePosition)
+            end
+            return
+        else
+            -- Continue moving to maintain distance from current zombie
+            moveToZombie(currentZombieTarget)
+            return
+        end
+    end
+    
+    -- Find new zombie target
+    local zombie, distance = findNearestZombie()
+    if zombie and distance < 10000 then -- Only target zombies within 100 studs
+        currentZombieTarget = zombie
+        addToConsole("🎯 Targeting zombie: " .. zombie.Name)
+        moveToZombie(zombie)
+    else
+        currentZombieTarget = nil
+    end
+end
+
 -- Auto Equip Tools Function
 local function equipAllTools()
     local character = GetCharacter()
@@ -629,7 +746,6 @@ local function autoEquipTools()
     equipAllTools()
     lastEquipTime = tick()
 end
-
 -- Auto-dig function
 local function DigLoop()
     if digRunning then return end
@@ -734,6 +850,7 @@ local function shouldReturnToField()
     local currentPollen = getCurrentPollen()
     return currentPollen == 0
 end
+
 -- Farming Logic
 local function startFarming()
     if not toggles.autoFarm or toggles.isFarming or not ownedHive then return end
@@ -969,7 +1086,6 @@ local function updateToys()
         useMountainCall()
     end
 end
-
 -- GUI Setup
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua"))()
@@ -1054,6 +1170,7 @@ local AutoEquipToggle = FarmingGroupbox:AddToggle("AutoEquipToggle", {
         end
     end
 })
+
 -- Movement Settings
 local MovementGroupbox = MainTab:AddRightGroupbox("Movement")
 local MovementMethodDropdown = MovementGroupbox:AddDropdown("MovementMethod", {
@@ -1125,6 +1242,30 @@ local AntiLagToggle = AntiLagGroupbox:AddToggle("AntiLagToggle", {
         end
     end
 })
+
+-- COMBAT TAB - NEW ADDITION
+local CombatTab = Window:AddTab("Combat", "sword")
+
+-- Combat Settings
+local CombatGroupbox = CombatTab:AddLeftGroupbox("Auto Zombies")
+local AutoZombiesToggle = CombatGroupbox:AddToggle("AutoZombiesToggle", {
+    Text = "Auto Zombies",
+    Default = false,
+    Callback = function(Value)
+        autoZombiesEnabled = Value
+        if Value then
+            addToConsole("🧟 Auto Zombies enabled")
+            currentZombieTarget = nil
+        else
+            addToConsole("🧟 Auto Zombies disabled")
+            currentZombieTarget = nil
+        end
+    end
+})
+
+local ZombieStatsGroupbox = CombatTab:AddRightGroupbox("Zombie Stats")
+local ZombiesKilledLabel = ZombieStatsGroupbox:AddLabel("Tokens Collected: 0")
+local CurrentTargetLabel = ZombieStatsGroupbox:AddLabel("Current Target: None")
 
 -- Toys Tab
 local ToysTab = Window:AddTab("Toys", "gift")
@@ -1271,6 +1412,7 @@ RunService.Heartbeat:Connect(function()
     autoEquipTools()
     updateToys()
     updateHoneyStats()
+    updateAutoZombies() -- NEW: Added Auto Zombies update
     
     -- Update status display
     local statusText = "Idle"
@@ -1288,9 +1430,21 @@ RunService.Heartbeat:Connect(function()
         end
     end
     
+    if autoZombiesEnabled and not toggles.autoFarm then
+        if currentZombieTarget then
+            statusText = "Fighting Zombie"
+        else
+            statusText = "Hunting Zombies"
+        end
+    end
+    
     StatusLabel:SetText("Status: " .. statusText)
     PollenLabel:SetText("Pollen: " .. formatNumber(currentPollen))
     HourlyHoneyLabel:SetText("Hourly Honey: " .. formatNumber(honeyStats.hourlyRate))
+    
+    -- Update zombie stats
+    ZombiesKilledLabel:SetText("Tokens Collected: " .. zombieTokensCollected)
+    CurrentTargetLabel:SetText("Current Target: " .. (currentZombieTarget and currentZombieTarget.Name or "None"))
     
     -- Update debug labels
     HoneyMadeLabel:SetText("Honey Made: " .. formatNumber(honeyStats.honeyMade))
@@ -1303,7 +1457,7 @@ spawn(function()
         local currentPollen = getCurrentPollen()
         
         WrappedLabel:SetText(string.format(
-            "Pollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s",
+            "Pollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Zombies: %s",
             formatNumber(currentPollen),
             toggles.field,
             displayHiveName,
@@ -1311,7 +1465,8 @@ spawn(function()
             toggles.autoDig and "ON" or "OFF",
             toggles.autoEquip and "ON" or "OFF",
             toggles.antiLag and "ON" or "OFF",
-            formatNumber(honeyStats.hourlyRate)
+            formatNumber(honeyStats.hourlyRate),
+            autoZombiesEnabled and "ON" or "OFF"
         ))
     end
 end)
@@ -1353,6 +1508,7 @@ end
 
 addToConsole("✅ Lavender Hub Ready!")
 addToConsole("🎯 Auto Farm System Ready!")
+addToConsole("🧟 Auto Zombies System Ready!")
 if ownedHive then
     addToConsole("🏠 Owned Hive: " .. ownedHive)
 else
