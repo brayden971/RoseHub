@@ -95,15 +95,17 @@ local honeyStats = {
     hourlyRate = 0
 }
 
--- AUTO SPRINKLERS SYSTEM - FIXED WITH PATTERNS
+-- IMPROVED AUTO SPRINKLERS SYSTEM - MORE STABLE
 local autoSprinklersEnabled = false
 local selectedSprinkler = "Basic Sprinkler"
 local sprinklerPlacementCount = 0
 local lastSprinklerPlaceTime = 0
-local sprinklerCooldown = 2 -- seconds between placements
+local sprinklerCooldown = 3 -- Increased for stability
 local currentFieldVisits = {} -- Track visits per field
 local placingSprinklers = false
 local sprinklersPlaced = false
+local sprinklerRetryCount = 0
+local MAX_SPRINKLER_RETRIES = 3
 
 -- Sprinkler configurations with exact placement patterns
 local sprinklerConfigs = {
@@ -669,7 +671,7 @@ local function performContinuousMovement()
     end
 end
 
--- COMPLETELY FIXED AUTO SPRINKLERS SYSTEM WITH EXACT PATTERNS
+-- IMPROVED AUTO SPRINKLERS SYSTEM - MORE STABLE AND RELIABLE
 local function getFieldFlowerPart(fieldName)
     local fieldsFolder = workspace:WaitForChild("Fields")
     local field = fieldsFolder:WaitForChild(fieldName)
@@ -693,25 +695,26 @@ local function useSprinklerRemote(fieldName)
         flowerPart
     }
     
-    local success = pcall(function()
+    local success, result = pcall(function()
         useItemRemote:FireServer(unpack(args))
+        return true
     end)
     
     if success then
         addToConsole("💦 Used sprinkler in " .. fieldName)
         return true
     else
-        addToConsole("❌ Failed to use sprinkler in " .. fieldName)
+        addToConsole("❌ Failed to use sprinkler in " .. fieldName .. ": " .. tostring(result))
         return false
     end
 end
 
+-- IMPROVED: More reliable sprinkler placement with better error handling
 local function placeSprinklers()
     if not autoSprinklersEnabled then return end
     if not toggles.autoFarm then return end
     if toggles.isConverting then return end
     if placingSprinklers then return end
-    if sprinklersPlaced then return end
     if not toggles.atField then return end
     
     local currentTime = tick()
@@ -748,52 +751,74 @@ local function placeSprinklers()
     -- Get sprinkler positions based on exact pattern
     local positions = config.pattern(fieldPos)
     
-    -- FIRST VISIT: Place the normal amount (no extra fire needed)
-    if visitCount == 1 then
-        addToConsole("🔄 First visit - placing " .. placementCount .. " sprinklers in pattern")
-        for i, position in ipairs(positions) do
-            if i > placementCount then break end
-            -- Move to each position and place sprinkler
-            moveToPosition(position)
-            task.wait(0.5)
-            if useSprinklerRemote(toggles.field) then
-                sprinklerPlacementCount = sprinklerPlacementCount + 1
-            end
-            task.wait(0.3)
-        end
-    -- SECOND VISIT or DIFFERENT FIELD: Fire remote once to clear, then place normally
-    else
-        addToConsole("🔄 Subsequent visit - clearing then placing " .. placementCount .. " sprinklers in pattern")
-        -- Fire remote once to clear existing sprinklers
-        useSprinklerRemote(toggles.field)
-        task.wait(0.5)
+    local successfulPlacements = 0
+    
+    -- IMPROVED: Better placement logic with retry mechanism
+    for i, position in ipairs(positions) do
+        if i > placementCount then break end
         
-        -- Place in pattern
-        for i, position in ipairs(positions) do
-            if i > placementCount then break end
-            -- Move to each position and place sprinkler
-            moveToPosition(position)
-            task.wait(0.5)
-            if useSprinklerRemote(toggles.field) then
-                sprinklerPlacementCount = sprinklerPlacementCount + 1
+        -- Move to each position and place sprinkler
+        if moveToPosition(position) then
+            task.wait(0.8) -- Increased wait for stability
+            
+            -- Try to place sprinkler with retry logic
+            local placed = false
+            for retry = 1, 2 do
+                if useSprinklerRemote(toggles.field) then
+                    sprinklerPlacementCount = sprinklerPlacementCount + 1
+                    successfulPlacements = successfulPlacements + 1
+                    placed = true
+                    break
+                else
+                    addToConsole("🔄 Retrying sprinkler placement... (" .. retry .. "/2)")
+                    task.wait(0.5)
+                end
             end
-            task.wait(0.3)
+            
+            if not placed then
+                addToConsole("❌ Failed to place sprinkler after retries")
+            end
+            
+            task.wait(0.5) -- Increased delay between placements
+        else
+            addToConsole("❌ Could not reach sprinkler position")
+        end
+    end
+    
+    -- IMPROVED: Reset sprinkler state based on success
+    if successfulPlacements > 0 then
+        sprinklersPlaced = true
+        sprinklerRetryCount = 0
+        addToConsole("✅ Successfully placed " .. successfulPlacements .. "/" .. placementCount .. " sprinklers")
+    else
+        sprinklerRetryCount = sprinklerRetryCount + 1
+        addToConsole("⚠️ Failed to place any sprinklers (retry " .. sprinklerRetryCount .. "/" .. MAX_SPRINKLER_RETRIES .. ")")
+        
+        if sprinklerRetryCount >= MAX_SPRINKLER_RETRIES then
+            addToConsole("🔧 Resetting sprinkler system due to repeated failures")
+            resetSprinklers()
+            sprinklerRetryCount = 0
         end
     end
     
     lastSprinklerPlaceTime = currentTime
-    sprinklersPlaced = true
     placingSprinklers = false
-    addToConsole("✅ Finished sprinkler placement with pattern")
 end
 
--- Reset sprinklers when changing fields or after converting
+-- IMPROVED: Better sprinkler reset with field visit tracking
 local function resetSprinklers()
     sprinklersPlaced = false
-    addToConsole("🔄 Sprinklers reset - ready for next placement")
+    sprinklerRetryCount = 0
+    
+    -- Reset visit count for current field to force fresh placement
+    if currentFieldVisits[toggles.field] then
+        currentFieldVisits[toggles.field] = 0
+    end
+    
+    addToConsole("🔄 Sprinklers reset - ready for fresh placement")
 end
 
--- Function to change field while farming
+-- IMPROVED: More reliable field changing with better sprinkler management
 local function changeFieldWhileFarming(newField)
     if not toggles.autoFarm or not toggles.isFarming then return end
     
@@ -802,10 +827,13 @@ local function changeFieldWhileFarming(newField)
     
     addToConsole("🔄 Changing field to: " .. newField)
     
-    -- Fire sprinkler remote once while tweening to unequip sprinklers
+    -- IMPROVED: Fire sprinkler remote multiple times to ensure unequip
     if autoSprinklersEnabled then
         addToConsole("💦 Unequipping sprinklers during field change...")
-        useSprinklerRemote(toggles.field)
+        for i = 1, 2 do
+            useSprinklerRemote(toggles.field)
+            task.wait(0.3)
+        end
     end
     
     -- Reset sprinklers when changing fields
@@ -820,6 +848,9 @@ local function changeFieldWhileFarming(newField)
         toggles.lastPollenChangeTime = tick()
         toggles.fieldArrivalTime = tick()
         toggles.hasCollectedPollen = (initialPollen > 0)
+        
+        -- IMPROVED: Wait a bit before placing sprinklers at new field
+        task.wait(1)
         
         -- Place sprinklers when changing fields
         if autoSprinklersEnabled then
@@ -858,14 +889,15 @@ local function onCharacterDeath()
                     toggles.atField = true
                     addToConsole("✅ Respawned to field successfully")
                     
-                    -- After respawning, place sprinklers 3 times since they get unequipped
+                    -- IMPROVED: Better sprinkler placement after respawn
                     if autoSprinklersEnabled then
-                        addToConsole("🚿 Placing sprinklers after respawn (3 times)")
-                        for i = 1, 3 do
+                        addToConsole("🚿 Placing sprinklers after respawn")
+                        task.wait(1)
+                        for i = 1, 2 do
                             if useSprinklerRemote(toggles.field) then
                                 sprinklerPlacementCount = sprinklerPlacementCount + 1
                             end
-                            task.wait(0.3)
+                            task.wait(0.5)
                         end
                         sprinklersPlaced = true
                     end
@@ -1059,9 +1091,10 @@ local function startFarming()
         
         addToConsole("✅ Arrived at field")
         
-        -- FIRST THING: Place sprinklers when arriving at field
+        -- IMPROVED: Better sprinkler placement timing
         if autoSprinklersEnabled then
             addToConsole("🚿 FIRST ACTION: Placing sprinklers at field...")
+            task.wait(1) -- Wait a bit before placing
             placeSprinklers()
         end
         
@@ -1330,7 +1363,7 @@ local AutoEquipToggle = FarmingGroupbox:AddToggle("AutoEquipToggle", {
     end
 })
 
--- AUTO SPRINKLERS - COMPLETELY FIXED WITH PATTERNS
+-- IMPROVED AUTO SPRINKLERS - MORE STABLE
 local AutoSprinklersToggle = FarmingGroupbox:AddToggle("AutoSprinklersToggle", {
     Text = "Auto Sprinklers",
     Default = false,
@@ -1340,6 +1373,7 @@ local AutoSprinklersToggle = FarmingGroupbox:AddToggle("AutoSprinklersToggle", {
         if Value then
             addToConsole("🚿 Auto Sprinklers enabled")
             sprinklerPlacementCount = 0
+            sprinklerRetryCount = 0
             currentFieldVisits = {} -- Reset visits when enabling
             resetSprinklers()
         else
@@ -1357,6 +1391,7 @@ local SprinklerDropdown = FarmingGroupbox:AddDropdown("SprinklerDropdown", {
         selectedSprinkler = Value
         saveSettings()
         addToConsole("🚿 Sprinkler type set to: " .. Value)
+        resetSprinklers() -- Reset when changing sprinkler type
     end
 })
 
@@ -1549,6 +1584,11 @@ DebugActionsGroupbox:AddButton("Place Sprinklers", function()
     end
 end)
 
+DebugActionsGroupbox:AddButton("Reset Sprinklers", function()
+    resetSprinklers()
+    addToConsole("Manually reset sprinklers")
+end)
+
 -- Status Groupbox
 local StatusGroupbox = MainTab:AddRightGroupbox("Status")
 local StatusLabel = StatusGroupbox:AddLabel("Status: Idle")
@@ -1676,7 +1716,7 @@ end
 
 addToConsole("✅ Lavender Hub Ready!")
 addToConsole("🎯 Auto Farm System Ready!")
-addToConsole("🚿 Auto Sprinklers System Ready!")
+addToConsole("🚿 IMPROVED Auto Sprinklers System Ready!")
 addToConsole("💀 Death Respawn System Ready!")
 if ownedHive then
     addToConsole("🏠 Owned Hive: " .. ownedHive)
