@@ -121,6 +121,10 @@ local lastFieldBeforeConvert = nil -- Track which field we were at before conver
 local placedSprinklersCount = 0 -- Track how many sprinklers we've placed
 local expectedSprinklerCount = 0 -- Expected number based on sprinkler type
 
+-- NEW: Auto-resume farming after reconnection
+local scriptFirstRun = true
+local resumeFarmingAfterLoad = false
+
 -- Sprinkler configurations with exact placement patterns
 local sprinklerConfigs = {
     ["Broken Sprinkler"] = {
@@ -339,6 +343,13 @@ local function loadSettings()
             webhookEnabled = decoded.webhookEnabled or webhookEnabled
             webhookURL = decoded.webhookURL or webhookURL
             webhookInterval = decoded.webhookInterval or webhookInterval
+            
+            -- NEW: Check if we need to resume farming after reconnection
+            if decoded.autoFarm then
+                resumeFarmingAfterLoad = true
+                addToConsole("🔄 Auto Farm was enabled - will resume after hive detection")
+            end
+            
             addToConsole("Settings loaded")
             return true
         end
@@ -479,12 +490,26 @@ local function checkHiveOwnership()
         if ownedHive and ownedHive ~= previousHive then
             addToConsole("New hive: " .. ownedHive)
             displayHiveName = "Hive"
+            
+            -- NEW: If we need to resume farming and we just got a hive, start farming
+            if resumeFarmingAfterLoad and not toggles.isFarming and not toggles.isConverting then
+                addToConsole("🏠 Hive detected - resuming auto farm...")
+                task.wait(2) -- Small delay to ensure everything is loaded
+                startFarming()
+            end
         elseif not ownedHive and previousHive then
             addToConsole("Hive lost")
             displayHiveName = "None"
         elseif ownedHive and previousHive == nil then
             addToConsole("Hive acquired: " .. ownedHive)
             displayHiveName = "Hive"
+            
+            -- NEW: If we need to resume farming and we just got a hive, start farming
+            if resumeFarmingAfterLoad and not toggles.isFarming and not toggles.isConverting then
+                addToConsole("🏠 Hive acquired - resuming auto farm...")
+                task.wait(2) -- Small delay to ensure everything is loaded
+                startFarming()
+            end
         end
         
         toggles.lastHiveCheckTime = tick()
@@ -1134,9 +1159,9 @@ local function shouldReturnToField()
     return currentPollen == 0
 end
 
--- Farming Logic
+-- FIXED: Farming Logic - Now properly resumes all farming activities after reconnection
 local function startFarming()
-    if not toggles.autoFarm or toggles.isFarming or not ownedHive then return end
+    if not toggles.autoFarm or toggles.isFarming then return end
     
     local fieldPos = fieldCoords[toggles.field]
     if not fieldPos then return end
@@ -1172,10 +1197,19 @@ local function startFarming()
             placeSprinklers()
         end
         
-        -- Start auto-dig if enabled
+        -- NEW: Ensure auto-dig starts properly after reconnection
         if toggles.autoDig then
+            addToConsole("🔄 Starting auto-dig after reconnection")
             spawn(DigLoop)
         end
+        
+        -- NEW: Auto-equip tools if enabled
+        if toggles.autoEquip then
+            addToConsole("🔄 Auto-equipping tools after reconnection")
+            equipAllTools()
+        end
+        
+        addToConsole("🎯 Farming activities resumed: Movement, Token Collection, Auto-Dig")
     else
         toggles.isFarming = false
         addToConsole("❌ Failed to reach field")
@@ -1459,7 +1493,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 
 local Window = Library:CreateWindow({
     Title = "Lavender Hub",
-    Footer = "v0.4 (Davi is a sigma)",
+    Footer = "v0.67 (Davi is a sigma)",
     ToggleKeybind = Enum.KeyCode.RightControl,
     Center = true,
     AutoShow = true,
@@ -1509,6 +1543,7 @@ local AutoFarmToggle = FarmingGroupbox:AddToggle("AutoFarmToggle", {
             toggles.atField = false
             toggles.atHive = false
             toggles.isMoving = false
+            resumeFarmingAfterLoad = false
         end
     end
 })
@@ -1519,6 +1554,10 @@ local AutoDigToggle = FarmingGroupbox:AddToggle("AutoDigToggle", {
     Callback = function(Value)
         toggles.autoDig = Value
         saveSettings()
+        -- NEW: If auto-dig is enabled and we're already farming, start the dig loop
+        if Value and toggles.autoFarm and toggles.atField and not toggles.isConverting then
+            spawn(DigLoop)
+        end
     end
 })
 
@@ -1927,6 +1966,12 @@ honeyStats.firstAutoFarmEnabled = false
 honeyStats.honeyMade = 0
 honeyStats.hourlyRate = 0
 
+-- NEW: Auto-resume farming if it was enabled before reconnection
+if resumeFarmingAfterLoad then
+    addToConsole("🔄 Auto Farm was enabled - waiting for hive detection to resume...")
+    -- The farming will automatically resume when hive is detected in checkHiveOwnership()
+end
+
 -- Run anti-lag on startup if enabled
 if toggles.antiLag then
     addToConsole("Running startup Anti-Lag...")
@@ -1943,3 +1988,6 @@ if ownedHive then
 else
     addToConsole("💔 No hive owned")
 end
+
+-- NEW: Mark first run as complete
+scriptFirstRun = false
