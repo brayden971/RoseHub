@@ -121,9 +121,118 @@ local lastFieldBeforeConvert = nil -- Track which field we were at before conver
 local placedSprinklersCount = 0 -- Track how many sprinklers we've placed
 local expectedSprinklerCount = 0 -- Expected number based on sprinkler type
 
--- NEW: Auto-resume farming after reconnection
-local scriptFirstRun = true
-local resumeFarmingAfterLoad = false
+-- Auto Farm Fires and Clouds
+local autoFarmFires = false
+local autoFarmClouds = false
+
+-- Fire collection system
+local fires = {}  -- Dictionary of valid fire parts
+local isCollectingFire = false
+
+local function isValidFire(obj)
+    if not obj:IsA("BasePart") then return false end
+    local nameLower = string.lower(obj.Name)
+    if not nameLower:find("fire") then return false end
+    if nameLower:find("mask") or nameLower:find("bee") then return false end
+    return true
+end
+
+-- Cloud collection system  
+local clouds = {}  -- Dictionary of valid cloud parts
+local isCollectingCloud = false
+local lastCloudVisit = {}
+
+local function isValidCloud(obj)
+    if not obj:IsA("BasePart") then return false end
+    local nameLower = string.lower(obj.Name)
+    return nameLower:find("cloud") and not nameLower:find("bee")
+end
+
+-- Initial population of fires and clouds
+local function populateFiresAndClouds()
+    fires = {}
+    clouds = {}
+    
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if isValidFire(obj) then
+            fires[obj] = true
+        end
+        if isValidCloud(obj) then
+            clouds[obj] = true
+        end
+    end
+end
+
+-- Listen for new descendants
+workspace.DescendantAdded:Connect(function(obj)
+    if isValidFire(obj) then
+        fires[obj] = true
+    end
+    if isValidCloud(obj) then
+        clouds[obj] = true
+    end
+end)
+
+workspace.DescendantRemoving:Connect(function(obj)
+    if fires[obj] then
+        fires[obj] = nil
+    end
+    if clouds[obj] then
+        clouds[obj] = nil
+    end
+end)
+
+local function getClosestFire()
+    local character = GetCharacter()
+    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return nil end
+
+    local closest = nil
+    local minDistance = math.huge
+    local currentPosition = rootPart.Position
+    
+    for fire in pairs(fires) do
+        if fire.Parent then  -- Ensure it still exists
+            local distance = (currentPosition - fire.Position).Magnitude
+            if distance < minDistance and distance <= 300 then
+                minDistance = distance
+                closest = fire
+            end
+        else
+            fires[fire] = nil  -- Clean up
+        end
+    end
+    
+    return closest
+end
+
+local function getClosestCloud()
+    local character = GetCharacter()
+    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return nil end
+
+    local closest = nil
+    local minDistance = math.huge
+    local currentPosition = rootPart.Position
+    
+    for cloud in pairs(clouds) do
+        if cloud.Parent then  -- Ensure it still exists
+            -- Check if we've visited this cloud recently (within 7 seconds)
+            local lastVisit = lastCloudVisit[cloud]
+            if not lastVisit or (tick() - lastVisit) >= 7 then
+                local distance = (currentPosition - cloud.Position).Magnitude
+                if distance < minDistance and distance <= 300 then
+                    minDistance = distance
+                    closest = cloud
+                end
+            end
+        else
+            clouds[cloud] = nil  -- Clean up
+        end
+    end
+    
+    return closest
+end
 
 -- Sprinkler configurations with exact placement patterns
 local sprinklerConfigs = {
@@ -298,7 +407,9 @@ local function saveSettings()
         selectedSprinkler = selectedSprinkler,
         webhookEnabled = webhookEnabled,
         webhookURL = webhookURL,
-        webhookInterval = webhookInterval
+        webhookInterval = webhookInterval,
+        autoFarmFires = autoFarmFires,
+        autoFarmClouds = autoFarmClouds
     }
     
     local success, encoded = pcall(function()
@@ -343,13 +454,8 @@ local function loadSettings()
             webhookEnabled = decoded.webhookEnabled or webhookEnabled
             webhookURL = decoded.webhookURL or webhookURL
             webhookInterval = decoded.webhookInterval or webhookInterval
-            
-            -- NEW: Check if we need to resume farming after reconnection
-            if decoded.autoFarm then
-                resumeFarmingAfterLoad = true
-                addToConsole("🔄 Auto Farm was enabled - will resume after hive detection")
-            end
-            
+            autoFarmFires = decoded.autoFarmFires or autoFarmFires
+            autoFarmClouds = decoded.autoFarmClouds or autoFarmClouds
             addToConsole("Settings loaded")
             return true
         end
@@ -357,7 +463,6 @@ local function loadSettings()
     addToConsole("No saved settings")
     return false
 end
-
 -- Simple Anti-Lag System
 local function runAntiLag()
     if not toggles.antiLag then return end
@@ -490,31 +595,18 @@ local function checkHiveOwnership()
         if ownedHive and ownedHive ~= previousHive then
             addToConsole("New hive: " .. ownedHive)
             displayHiveName = "Hive"
-            
-            -- NEW: If we need to resume farming and we just got a hive, start farming
-            if resumeFarmingAfterLoad and not toggles.isFarming and not toggles.isConverting then
-                addToConsole("🏠 Hive detected - resuming auto farm...")
-                task.wait(2) -- Small delay to ensure everything is loaded
-                startFarming()
-            end
         elseif not ownedHive and previousHive then
             addToConsole("Hive lost")
             displayHiveName = "None"
         elseif ownedHive and previousHive == nil then
             addToConsole("Hive acquired: " .. ownedHive)
             displayHiveName = "Hive"
-            
-            -- NEW: If we need to resume farming and we just got a hive, start farming
-            if resumeFarmingAfterLoad and not toggles.isFarming and not toggles.isConverting then
-                addToConsole("🏠 Hive acquired - resuming auto farm...")
-                task.wait(2) -- Small delay to ensure everything is loaded
-                startFarming()
-            end
         end
         
         toggles.lastHiveCheckTime = tick()
     end
 end
+
 -- FIXED SMOOTH TWEEN MOVEMENT SYSTEM
 local function smoothTweenToPosition(targetPos)
     local character = GetCharacter()
@@ -735,6 +827,59 @@ local function performContinuousMovement()
             toggles.isMoving = false
             toggles.currentTarget = nil
         end
+    end
+end
+-- Fire and Cloud Collection Functions
+local function collectFire()
+    if not autoFarmFires or toggles.isConverting or isCollectingFire then return end
+    
+    local fire = getClosestFire()
+    if fire then
+        isCollectingFire = true
+        addToConsole("🔥 Collecting fire")
+        
+        local character = GetCharacter()
+        local humanoid = character and character:FindFirstChild("Humanoid")
+        if humanoid then
+            -- Move to fire position
+            humanoid:MoveTo(fire.Position)
+            local startTime = tick()
+            while (character.HumanoidRootPart.Position - fire.Position).Magnitude > 4 and tick() - startTime < 5 do
+                if not fire.Parent then break end
+                task.wait()
+            end
+            
+            -- Stay at fire for 2 seconds
+            task.wait(2)
+        end
+        isCollectingFire = false
+    end
+end
+
+local function collectCloud()
+    if not autoFarmClouds or toggles.isConverting or isCollectingCloud then return end
+    
+    local cloud = getClosestCloud()
+    if cloud then
+        isCollectingCloud = true
+        addToConsole("☁️ Collecting cloud")
+        
+        local character = GetCharacter()
+        local humanoid = character and character:FindFirstChild("Humanoid")
+        if humanoid then
+            -- Move to position under the cloud
+            local targetPosition = Vector3.new(cloud.Position.X, cloud.Position.Y - 10, cloud.Position.Z)
+            humanoid:MoveTo(targetPosition)
+            local startTime = tick()
+            while (character.HumanoidRootPart.Position - targetPosition).Magnitude > 4 and tick() - startTime < 5 do
+                if not cloud.Parent then break end
+                task.wait()
+            end
+            
+            -- Record visit time
+            lastCloudVisit[cloud] = tick()
+        end
+        isCollectingCloud = false
     end
 end
 
@@ -1159,9 +1304,9 @@ local function shouldReturnToField()
     return currentPollen == 0
 end
 
--- FIXED: Farming Logic - Now properly resumes all farming activities after reconnection
+-- Farming Logic
 local function startFarming()
-    if not toggles.autoFarm or toggles.isFarming then return end
+    if not toggles.autoFarm or toggles.isFarming or not ownedHive then return end
     
     local fieldPos = fieldCoords[toggles.field]
     if not fieldPos then return end
@@ -1197,19 +1342,10 @@ local function startFarming()
             placeSprinklers()
         end
         
-        -- NEW: Ensure auto-dig starts properly after reconnection
+        -- Start auto-dig if enabled
         if toggles.autoDig then
-            addToConsole("🔄 Starting auto-dig after reconnection")
             spawn(DigLoop)
         end
-        
-        -- NEW: Auto-equip tools if enabled
-        if toggles.autoEquip then
-            addToConsole("🔄 Auto-equipping tools after reconnection")
-            equipAllTools()
-        end
-        
-        addToConsole("🎯 Farming activities resumed: Movement, Token Collection, Auto-Dig")
     else
         toggles.isFarming = false
         addToConsole("❌ Failed to reach field")
@@ -1267,14 +1403,18 @@ local function updateFarmState()
     -- Update pollen tracking
     updatePollenTracking()
     
-    -- State transitions
+    -- State transitions with fire and cloud collection priority
     if toggles.isFarming and toggles.atField then
         if shouldConvertToHive() then
             addToConsole("Converting to honey")
             startConverting()
         else
-            -- Priority: Tokens > Movement
-            if areTokensNearby() then
+            -- Priority: Clouds > Fires > Tokens > Movement
+            if autoFarmClouds and getClosestCloud() then
+                collectCloud()
+            elseif autoFarmFires and getClosestFire() then
+                collectFire()
+            elseif areTokensNearby() then
                 collectTokens()
             elseif not toggles.isMoving and not areTokensNearby() then
                 performContinuousMovement()
@@ -1493,7 +1633,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 
 local Window = Library:CreateWindow({
     Title = "Lavender Hub",
-    Footer = "v0.67 (Davi is a sigma)",
+    Footer = "v0.4 (Davi is a sigma)",
     ToggleKeybind = Enum.KeyCode.RightControl,
     Center = true,
     AutoShow = true,
@@ -1543,7 +1683,6 @@ local AutoFarmToggle = FarmingGroupbox:AddToggle("AutoFarmToggle", {
             toggles.atField = false
             toggles.atHive = false
             toggles.isMoving = false
-            resumeFarmingAfterLoad = false
         end
     end
 })
@@ -1554,10 +1693,6 @@ local AutoDigToggle = FarmingGroupbox:AddToggle("AutoDigToggle", {
     Callback = function(Value)
         toggles.autoDig = Value
         saveSettings()
-        -- NEW: If auto-dig is enabled and we're already farming, start the dig loop
-        if Value and toggles.autoFarm and toggles.atField and not toggles.isConverting then
-            spawn(DigLoop)
-        end
     end
 })
 
@@ -1572,6 +1707,38 @@ local AutoEquipToggle = FarmingGroupbox:AddToggle("AutoEquipToggle", {
             equipAllTools()
         else
             addToConsole("Auto Equip Tools disabled")
+        end
+    end
+})
+
+-- Farm Settings Groupbox
+local FarmSettingsGroupbox = MainTab:AddRightGroupbox("Farm Settings")
+local AutoFarmFiresToggle = FarmSettingsGroupbox:AddToggle("AutoFarmFiresToggle", {
+    Text = "Auto Farm Fires",
+    Default = false,
+    Callback = function(Value)
+        autoFarmFires = Value
+        saveSettings()
+        if Value then
+            addToConsole("🔥 Auto Farm Fires enabled")
+            populateFiresAndClouds()
+        else
+            addToConsole("🔥 Auto Farm Fires disabled")
+        end
+    end
+})
+
+local AutoFarmCloudsToggle = FarmSettingsGroupbox:AddToggle("AutoFarmCloudsToggle", {
+    Text = "Auto Farm Clouds",
+    Default = false,
+    Callback = function(Value)
+        autoFarmClouds = Value
+        saveSettings()
+        if Value then
+            addToConsole("☁️ Auto Farm Clouds enabled")
+            populateFiresAndClouds()
+        else
+            addToConsole("☁️ Auto Farm Clouds disabled")
         end
     end
 })
@@ -1861,6 +2028,9 @@ end)
 -- Setup death detection on startup
 setupDeathDetection()
 
+-- Initialize fires and clouds system
+populateFiresAndClouds()
+
 -- Optimized Main Loops
 local lastHeartbeatTime = 0
 RunService.Heartbeat:Connect(function()
@@ -1911,7 +2081,7 @@ spawn(function()
         local currentHoney = getCurrentHoney()
         
         WrappedLabel:SetText(string.format(
-            "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s",
+            "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s\nAuto Fires: %s\nAuto Clouds: %s",
             formatNumberCorrect(currentHoney),
             formatNumberCorrect(currentPollen),
             toggles.field,
@@ -1922,7 +2092,9 @@ spawn(function()
             toggles.antiLag and "ON" or "OFF",
             formatNumberCorrect(honeyStats.hourlyRate),
             autoSprinklersEnabled and "ON" or "OFF",
-            selectedSprinkler
+            selectedSprinkler,
+            autoFarmFires and "ON" or "OFF",
+            autoFarmClouds and "ON" or "OFF"
         ))
     end
 end)
@@ -1945,11 +2117,10 @@ SprinklerDropdown:Set(selectedSprinkler)
 WebhookToggle:Set(webhookEnabled)
 WebhookURLBox:Set(webhookURL)
 WebhookIntervalSlider:Set(webhookInterval)
+AutoFarmFiresToggle:Set(autoFarmFires)
+AutoFarmCloudsToggle:Set(autoFarmClouds)
 
--- AUTO CLAIM ALL HIVES ON STARTUP
 addToConsole("🚀 Lavender Hub v0.4 Starting...")
-addToConsole("🔄 Auto-claiming hives...")
-autoClaimHive()
 
 task.wait(3)
 
@@ -1966,12 +2137,6 @@ honeyStats.firstAutoFarmEnabled = false
 honeyStats.honeyMade = 0
 honeyStats.hourlyRate = 0
 
--- NEW: Auto-resume farming if it was enabled before reconnection
-if resumeFarmingAfterLoad then
-    addToConsole("🔄 Auto Farm was enabled - waiting for hive detection to resume...")
-    -- The farming will automatically resume when hive is detected in checkHiveOwnership()
-end
-
 -- Run anti-lag on startup if enabled
 if toggles.antiLag then
     addToConsole("Running startup Anti-Lag...")
@@ -1980,6 +2145,8 @@ end
 
 addToConsole("✅ Lavender Hub Ready!")
 addToConsole("🎯 Auto Farm System Ready!")
+addToConsole("🔥 Auto Farm Fires System Ready!")
+addToConsole("☁️ Auto Farm Clouds System Ready!")
 addToConsole("🚿 IMPROVED Auto Sprinklers System Ready!")
 addToConsole("💀 Death Respawn System Ready!")
 addToConsole("🌐 Webhook System Ready!")
@@ -1988,6 +2155,3 @@ if ownedHive then
 else
     addToConsole("💔 No hive owned")
 end
-
--- NEW: Mark first run as complete
-scriptFirstRun = false
