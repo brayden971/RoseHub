@@ -158,7 +158,7 @@ workspace.DescendantRemoving:Connect(function(obj)
     if fires[obj] then
         fires[obj] = nil
     end
-end)
+end
 
 local function getClosestFire()
     local character = GetCharacter()
@@ -411,7 +411,7 @@ local function loadSettings()
     addToConsole("No saved settings")
     return false
 end
--- Simple Anti-Lag System
+    -- Simple Anti-Lag System
 local function runAntiLag()
     if not toggles.antiLag then return end
     
@@ -776,29 +776,34 @@ local function performContinuousMovement()
             toggles.currentTarget = nil
         end
     end
-end
--- Fire Collection Function
+    end
+    -- Fire Collection Function - FIXED: Non-blocking and properly integrated
 local function collectFire()
     if not autoFarmFires or toggles.isConverting or isCollectingFire or not toggles.atField then return false end
     
     local fire = getClosestFire()
     if fire then
         isCollectingFire = true
-        addToConsole("🔥 Collecting fire")
         
-        local character = GetCharacter()
-        local humanoid = character and character:FindFirstChild("Humanoid")
-        if humanoid then
-            -- Move to fire position using the existing movement system
-            if moveToPosition(fire.Position) then
-                -- Stay at fire for 2 seconds
-                local startTime = tick()
-                while tick() - startTime < 2 and fire.Parent do
-                    task.wait(0.1)
+        -- Use spawn to make it non-blocking
+        spawn(function()
+            addToConsole("🔥 Collecting fire")
+            
+            local character = GetCharacter()
+            local humanoid = character and character:FindFirstChild("Humanoid")
+            if humanoid then
+                -- Move to fire position using the existing movement system
+                if moveToPosition(fire.Position) then
+                    -- Stay at fire for 2 seconds (non-blocking)
+                    local startTime = tick()
+                    while tick() - startTime < 2 and fire.Parent and toggles.autoFarm do
+                        task.wait(0.1)
+                    end
                 end
             end
-        end
-        isCollectingFire = false
+            isCollectingFire = false
+        end)
+        
         return true
     end
     return false
@@ -1119,8 +1124,8 @@ local function autoEquipTools()
     
     equipAllTools()
     lastEquipTime = tick()
-end
--- Auto-dig function
+    end
+    -- Auto-dig function
 local function DigLoop()
     if digRunning then return end
     digRunning = true
@@ -1309,7 +1314,7 @@ local function startConverting()
     end
 end
 
--- Main Loop
+-- Main Loop - FIXED: Fire collection won't block farming
 local lastUpdateTime = 0
 local function updateFarmState()
     if not toggles.autoFarm then return end
@@ -1331,7 +1336,8 @@ local function updateFarmState()
             startConverting()
         else
             -- Priority: Fires > Tokens > Movement
-            if autoFarmFires and getClosestFire() then
+            -- FIXED: Fire collection is non-blocking now
+            if autoFarmFires and getClosestFire() and not isCollectingFire then
                 collectFire()
             elseif areTokensNearby() then
                 collectTokens()
@@ -1544,15 +1550,15 @@ local function updateToys()
     if mountainCallEnabled and currentTime - lastMountainCallTime >= 21600 then -- 6 hours
         useMountainCall()
     end
-end
--- GUI Setup
+    end
+    -- GUI Setup
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/SaveManager.lua"))()
 
 local Window = Library:CreateWindow({
     Title = "Lavender Hub",
-    Footer = "v0.7 (does anyone read this)",
+    Footer = "v0.4 (Davi is a sigma)",
     ToggleKeybind = Enum.KeyCode.RightControl,
     Center = true,
     AutoShow = true,
@@ -2055,4 +2061,4 @@ if ownedHive then
     addToConsole("🏠 Owned Hive: " .. ownedHive)
 else
     addToConsole("💔 No hive owned")
-end
+    end
