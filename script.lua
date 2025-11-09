@@ -121,69 +121,6 @@ local lastFieldBeforeConvert = nil -- Track which field we were at before conver
 local placedSprinklersCount = 0 -- Track how many sprinklers we've placed
 local expectedSprinklerCount = 0 -- Expected number based on sprinkler type
 
--- Auto Farm Fires
-local autoFarmFires = false
-
--- Fire collection system
-local fires = {}  -- Dictionary of valid fire parts
-local isCollectingFire = false
-
-local function isValidFire(obj)
-    if not obj:IsA("BasePart") then return false end
-    local nameLower = string.lower(obj.Name)
-    if not nameLower:find("fire") then return false end
-    if nameLower:find("mask") or nameLower:find("bee") then return false end
-    return true
-end
-
--- Initial population of fires
-local function populateFires()
-    fires = {}
-    
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if isValidFire(obj) then
-            fires[obj] = true
-        end
-    end
-end
-
--- Listen for new descendants
-workspace.DescendantAdded:Connect(function(obj)
-    if isValidFire(obj) then
-        fires[obj] = true
-    end
-end)
-
-workspace.DescendantRemoving:Connect(function(obj)
-    if fires[obj] then
-        fires[obj] = nil
-    end
-end
-
-local function getClosestFire()
-    local character = GetCharacter()
-    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-    if not rootPart then return nil end
-
-    local closest = nil
-    local minDistance = math.huge
-    local currentPosition = rootPart.Position
-    
-    for fire in pairs(fires) do
-        if fire.Parent then  -- Ensure it still exists
-            local distance = (currentPosition - fire.Position).Magnitude
-            if distance < minDistance and distance <= 300 then
-                minDistance = distance
-                closest = fire
-            end
-        else
-            fires[fire] = nil  -- Clean up
-        end
-    end
-    
-    return closest
-end
-
 -- Sprinkler configurations with exact placement patterns
 local sprinklerConfigs = {
     ["Broken Sprinkler"] = {
@@ -340,7 +277,6 @@ local function addToConsole(message)
         consoleLabel:SetText(table.concat(consoleLogs, "\n"))
     end
 end
-
 -- Auto-Save Functions
 local function saveSettings()
     local settingsToSave = {
@@ -357,8 +293,7 @@ local function saveSettings()
         selectedSprinkler = selectedSprinkler,
         webhookEnabled = webhookEnabled,
         webhookURL = webhookURL,
-        webhookInterval = webhookInterval,
-        autoFarmFires = autoFarmFires
+        webhookInterval = webhookInterval
     }
     
     local success, encoded = pcall(function()
@@ -403,7 +338,6 @@ local function loadSettings()
             webhookEnabled = decoded.webhookEnabled or webhookEnabled
             webhookURL = decoded.webhookURL or webhookURL
             webhookInterval = decoded.webhookInterval or webhookInterval
-            autoFarmFires = decoded.autoFarmFires or autoFarmFires
             addToConsole("Settings loaded")
             return true
         end
@@ -411,7 +345,8 @@ local function loadSettings()
     addToConsole("No saved settings")
     return false
 end
-    -- Simple Anti-Lag System
+
+-- Simple Anti-Lag System
 local function runAntiLag()
     if not toggles.antiLag then return end
     
@@ -554,7 +489,6 @@ local function checkHiveOwnership()
         toggles.lastHiveCheckTime = tick()
     end
 end
-
 -- FIXED SMOOTH TWEEN MOVEMENT SYSTEM
 local function smoothTweenToPosition(targetPos)
     local character = GetCharacter()
@@ -776,37 +710,6 @@ local function performContinuousMovement()
             toggles.currentTarget = nil
         end
     end
-    end
-    -- Fire Collection Function - FIXED: Non-blocking and properly integrated
-local function collectFire()
-    if not autoFarmFires or toggles.isConverting or isCollectingFire or not toggles.atField then return false end
-    
-    local fire = getClosestFire()
-    if fire then
-        isCollectingFire = true
-        
-        -- Use spawn to make it non-blocking
-        spawn(function()
-            addToConsole("🔥 Collecting fire")
-            
-            local character = GetCharacter()
-            local humanoid = character and character:FindFirstChild("Humanoid")
-            if humanoid then
-                -- Move to fire position using the existing movement system
-                if moveToPosition(fire.Position) then
-                    -- Stay at fire for 2 seconds (non-blocking)
-                    local startTime = tick()
-                    while tick() - startTime < 2 and fire.Parent and toggles.autoFarm do
-                        task.wait(0.1)
-                    end
-                end
-            end
-            isCollectingFire = false
-        end)
-        
-        return true
-    end
-    return false
 end
 
 -- IMPROVED AUTO SPRINKLERS SYSTEM - MORE STABLE AND RELIABLE
@@ -870,7 +773,6 @@ local function getPlacedSprinklersCount()
     
     return placedCount
 end
-
 -- IMPROVED: More reliable sprinkler placement with detection
 local function placeSprinklers()
     if not autoSprinklersEnabled then return end
@@ -1124,8 +1026,9 @@ local function autoEquipTools()
     
     equipAllTools()
     lastEquipTime = tick()
-    end
-    -- Auto-dig function
+end
+
+-- Auto-dig function
 local function DigLoop()
     if digRunning then return end
     digRunning = true
@@ -1197,7 +1100,6 @@ local function collectTokens()
         isCollectingToken = false
     end
 end
-
 -- Pollen Tracking
 local function updatePollenTracking()
     if not toggles.atField then return end
@@ -1314,7 +1216,7 @@ local function startConverting()
     end
 end
 
--- Main Loop - FIXED: Fire collection won't block farming
+-- Main Loop
 local lastUpdateTime = 0
 local function updateFarmState()
     if not toggles.autoFarm then return end
@@ -1329,17 +1231,14 @@ local function updateFarmState()
     -- Update pollen tracking
     updatePollenTracking()
     
-    -- State transitions with fire collection priority
+    -- State transitions
     if toggles.isFarming and toggles.atField then
         if shouldConvertToHive() then
             addToConsole("Converting to honey")
             startConverting()
         else
-            -- Priority: Fires > Tokens > Movement
-            -- FIXED: Fire collection is non-blocking now
-            if autoFarmFires and getClosestFire() and not isCollectingFire then
-                collectFire()
-            elseif areTokensNearby() then
+            -- Priority: Tokens > Movement
+            if areTokensNearby() then
                 collectTokens()
             elseif not toggles.isMoving and not areTokensNearby() then
                 performContinuousMovement()
@@ -1550,15 +1449,15 @@ local function updateToys()
     if mountainCallEnabled and currentTime - lastMountainCallTime >= 21600 then -- 6 hours
         useMountainCall()
     end
-    end
-    -- GUI Setup
+end
+-- GUI Setup
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/SaveManager.lua"))()
 
 local Window = Library:CreateWindow({
     Title = "Lavender Hub",
-    Footer = "v0.4 (Davi is a sigma)",
+    Footer = "made by sal (v0.7)",
     ToggleKeybind = Enum.KeyCode.RightControl,
     Center = true,
     AutoShow = true,
@@ -1632,23 +1531,6 @@ local AutoEquipToggle = FarmingGroupbox:AddToggle("AutoEquipToggle", {
             equipAllTools()
         else
             addToConsole("Auto Equip Tools disabled")
-        end
-    end
-})
-
--- Farm Settings Groupbox
-local FarmSettingsGroupbox = MainTab:AddRightGroupbox("Farm Settings")
-local AutoFarmFiresToggle = FarmSettingsGroupbox:AddToggle("AutoFarmFiresToggle", {
-    Text = "Auto Farm Fires",
-    Default = false,
-    Callback = function(Value)
-        autoFarmFires = Value
-        saveSettings()
-        if Value then
-            addToConsole("🔥 Auto Farm Fires enabled")
-            populateFires()
-        else
-            addToConsole("🔥 Auto Farm Fires disabled")
         end
     end
 })
@@ -1878,9 +1760,9 @@ local MountainCallToggle = MountainCallGroupbox:AddToggle("MountainCallToggle", 
 -- Console Tab
 local ConsoleTab = Window:AddTab("Console", "terminal")
 local ConsoleGroupbox = ConsoleTab:AddLeftGroupbox("Output")
-consoleLabel = ConsoleGroupbox:AddLabel({ Text = "Lavender Hub v0.4 Ready", DoesWrap = true })
+consoleLabel = ConsoleGroupbox:AddLabel({ Text = "Lavender Hub v0.7 Ready", DoesWrap = true })
 
--- Debug Tab (CLEANED - removed sprinkler and hive buttons)
+-- Debug Tab
 local DebugTab = Window:AddTab("Debug", "bug")
 local DebugGroupbox = DebugTab:AddLeftGroupbox("Performance Stats")
 debugLabels.fps = DebugGroupbox:AddLabel("FPS: 0")
@@ -1938,9 +1820,6 @@ end)
 -- Setup death detection on startup
 setupDeathDetection()
 
--- Initialize fires system
-populateFires()
-
 -- Optimized Main Loops
 local lastHeartbeatTime = 0
 RunService.Heartbeat:Connect(function()
@@ -1991,7 +1870,7 @@ spawn(function()
         local currentHoney = getCurrentHoney()
         
         WrappedLabel:SetText(string.format(
-            "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s\nAuto Fires: %s",
+            "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s",
             formatNumberCorrect(currentHoney),
             formatNumberCorrect(currentPollen),
             toggles.field,
@@ -2002,8 +1881,7 @@ spawn(function()
             toggles.antiLag and "ON" or "OFF",
             formatNumberCorrect(honeyStats.hourlyRate),
             autoSprinklersEnabled and "ON" or "OFF",
-            selectedSprinkler,
-            autoFarmFires and "ON" or "OFF"
+            selectedSprinkler
         ))
     end
 end)
@@ -2026,9 +1904,8 @@ SprinklerDropdown:Set(selectedSprinkler)
 WebhookToggle:Set(webhookEnabled)
 WebhookURLBox:Set(webhookURL)
 WebhookIntervalSlider:Set(webhookInterval)
-AutoFarmFiresToggle:Set(autoFarmFires)
 
-addToConsole("🚀 Lavender Hub v0.4 Starting...")
+addToConsole("🚀 Lavender Hub v0.7 Starting...")
 
 task.wait(3)
 
@@ -2053,7 +1930,6 @@ end
 
 addToConsole("✅ Lavender Hub Ready!")
 addToConsole("🎯 Auto Farm System Ready!")
-addToConsole("🔥 Auto Farm Fires System Ready!")
 addToConsole("🚿 IMPROVED Auto Sprinklers System Ready!")
 addToConsole("💀 Death Respawn System Ready!")
 addToConsole("🌐 Webhook System Ready!")
@@ -2061,4 +1937,4 @@ if ownedHive then
     addToConsole("🏠 Owned Hive: " .. ownedHive)
 else
     addToConsole("💔 No hive owned")
-    end
+end
